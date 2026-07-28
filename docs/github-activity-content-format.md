@@ -1,0 +1,54 @@
+# GitHub activity content format
+
+This note defines the content representation for the one-line latest-activity
+snippet.
+
+## Finding
+
+The GraphQL activity fields already return GitHub-rendered text. The REST
+inline review-comment endpoint defaults to raw Markdown unless the request
+selects its text representation.
+
+| Activity source | Field | GitHub format |
+| --- | --- | --- |
+| GraphQL `IssueComment` | `bodyText` | Body rendered to text |
+| GraphQL `PullRequestReview` | `bodyText` | Review body rendered as plain text |
+| REST pull request review comment | `body` | Raw Markdown, the default representation |
+| REST pull request review comment | `body_text` | Text-only representation, available with the text media type |
+
+Sources:
+
+- [GraphQL `IssueComment`](https://docs.github.com/en/graphql/reference/issues#issuecomment)
+- [GraphQL `PullRequestReview`](https://docs.github.com/en/graphql/reference/pulls#pullrequestreview)
+- [REST review-comment representations](https://docs.github.com/en/rest/pulls/comments?apiVersion=2022-11-28#list-review-comments-on-a-pull-request)
+
+## Current artifact
+
+GitHub Workbench already queries GraphQL `bodyText` for Issue comments and
+submitted reviews. Those paths receive rendered text.
+
+The inline review-comment request currently sends the generic
+`application/vnd.github+json` media type. Its decoder prefers `body_text`, then
+falls back to `body`. The default REST representation supplies raw Markdown in
+`body`, so markup such as `**`, `<sub>`, and `![badge](url)` can reach the UI.
+
+## Minimal implementation
+
+1. Request inline review comments with:
+
+   ```http
+   Accept: application/vnd.github-commitcomment.text+json
+   ```
+
+2. Use `body_text` as the activity body. An absent or empty value can remain an
+   empty snippet; avoid displaying the raw `body` fallback.
+3. Keep the existing whitespace collapse and 160-rune truncation after the
+   representation is normalized.
+4. Add a client test that verifies the text media type and proves raw badge
+   Markdown never reaches `Activity.BodyText`.
+
+GitHub guarantees a text representation, not a natural-language summary.
+Code, image alternative text, table contents, and other meaningful symbols
+may remain. Keep those in the first implementation. Add targeted cleanup only
+for a repeated artifact confirmed in live samples; a generic Markdown regex
+would risk removing valid code and prose.
