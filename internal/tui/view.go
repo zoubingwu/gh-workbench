@@ -13,14 +13,17 @@ import (
 )
 
 const (
-	ansiReset   = "\x1b[0m"
-	ansiBold    = "\x1b[1m"
-	ansiDim     = "\x1b[2m"
-	ansiReverse = "\x1b[7m"
-	ansiRed     = "\x1b[31m"
-	ansiGreen   = "\x1b[32m"
-	ansiYellow  = "\x1b[33m"
-	ansiCyan    = "\x1b[36m"
+	ansiReset       = "\x1b[0m"
+	ansiBold        = "\x1b[1m"
+	ansiDim         = "\x1b[2m"
+	ansiReverse     = "\x1b[7m"
+	ansiNoReverse   = "\x1b[27m"
+	ansiBlack       = "\x1b[30m"
+	ansiRed         = "\x1b[31m"
+	ansiGreen       = "\x1b[32m"
+	ansiYellow      = "\x1b[33m"
+	ansiCyan        = "\x1b[36m"
+	ansiBrightWhite = "\x1b[97m"
 )
 
 func (m terminalModel) View() tea.View {
@@ -246,7 +249,11 @@ func (m terminalModel) itemTitleLine(
 	}
 
 	line := fmt.Sprintf("%s %s %s", pointer, icon, terminalText(item.Title))
-	line = joinItemSummary(line, itemSummary(item), m.width)
+	line = joinItemSummary(
+		line,
+		itemSummary(item, selected),
+		m.width,
+	)
 	if selected {
 		return style(line, ansiReverse)
 	}
@@ -293,16 +300,25 @@ func (m terminalModel) itemDetailLine(
 	return style(line, ansiDim)
 }
 
-func itemSummary(item model.WorkItem) string {
+func itemSummary(item model.WorkItem, selected bool) string {
 	if item.Kind == model.ItemKindPullRequest {
-		return fmt.Sprintf(
-			"Status: %s · Changes: +%d -%d",
-			workItemStatus(item),
-			item.Additions,
-			item.Deletions,
-		)
+		status := workItemStatus(item)
+		return "Status: " +
+			coloredText(status, statusColor(status), selected) +
+			" · Changes: " +
+			coloredText(
+				"+"+strconv.Itoa(item.Additions),
+				ansiGreen,
+				selected,
+			) +
+			" " +
+			coloredText(
+				"-"+strconv.Itoa(item.Deletions),
+				ansiRed,
+				selected,
+			)
 	}
-	return "Labels: " + labelSummary(item.Labels)
+	return "Labels: " + labelSummary(item.Labels, selected)
 }
 
 func joinItemSummary(prefix, summary string, width int) string {
@@ -315,15 +331,77 @@ func joinItemSummary(prefix, summary string, width int) string {
 	return truncate(prefix, prefixWidth) + suffix
 }
 
-func labelSummary(labels []model.Label) string {
+func labelSummary(labels []model.Label, selected bool) string {
 	if len(labels) == 0 {
 		return "none"
 	}
 	values := make([]string, 0, len(labels))
 	for _, label := range labels {
-		values = append(values, terminalText(label.Name))
+		values = append(values, labelText(label, selected))
 	}
-	return strings.Join(values, ", ")
+	return strings.Join(values, " ")
+}
+
+func statusColor(status string) string {
+	switch status {
+	case "Open", "Approved":
+		return ansiGreen
+	case "Review requested", "Review required":
+		return ansiYellow
+	case "Changes requested":
+		return ansiRed
+	case "Draft":
+		return ansiDim
+	default:
+		return ansiCyan
+	}
+}
+
+func coloredText(value, color string, selected bool) string {
+	prefix := ""
+	suffix := ansiReset
+	if selected {
+		prefix = ansiNoReverse
+		suffix += ansiReverse
+	}
+	return prefix + color + value + suffix
+}
+
+func labelText(label model.Label, selected bool) string {
+	color := strings.TrimPrefix(strings.TrimSpace(label.Color), "#")
+	value, err := strconv.ParseUint(color, 16, 24)
+	if err != nil || len(color) != 6 {
+		return terminalText(label.Name)
+	}
+
+	red := int(value >> 16)
+	green := int(value >> 8 & 0xff)
+	blue := int(value & 0xff)
+	foreground := ansiBrightWhite
+	luminance := (299*red + 587*green + 114*blue) / 1000
+	if luminance > 160 {
+		foreground = ansiBlack
+	}
+
+	prefix := ""
+	suffix := ansiReset
+	if selected {
+		prefix = ansiNoReverse
+		suffix += ansiReverse
+	}
+	background := fmt.Sprintf(
+		"\x1b[48;2;%d;%d;%dm",
+		red,
+		green,
+		blue,
+	)
+	return prefix +
+		foreground +
+		background +
+		" " +
+		terminalText(label.Name) +
+		" " +
+		suffix
 }
 
 func (m terminalModel) emptyLine() string {

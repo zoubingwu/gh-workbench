@@ -633,6 +633,98 @@ func TestViewKeepsStructuredDetailsVisibleForEveryItem(t *testing.T) {
 	}
 }
 
+func TestViewColorsStatusesChangesAndLabels(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	approved := workItem(
+		"acme/api",
+		1,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	approved.ReviewDecision = "APPROVED"
+	approved.Additions = 10
+	approved.Deletions = 2
+
+	changesRequested := workItem(
+		"acme/api",
+		2,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	changesRequested.ReviewDecision = "CHANGES_REQUESTED"
+
+	reviewRequested := workItem(
+		"acme/api",
+		3,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	reviewRequested.NeedsReview = true
+
+	draft := workItem(
+		"acme/api",
+		4,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	draft.IsDraft = true
+
+	issue := workItem(
+		"acme/api",
+		5,
+		model.ItemKindIssue,
+		"alice",
+		now,
+	)
+	issue.Labels = []model.Label{
+		{Name: "bug", Color: "d73a4a"},
+		{Name: "docs", Color: "fef2c0"},
+	}
+
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, tea.WindowSizeMsg{
+		Width:  220,
+		Height: 40,
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items: []model.WorkItem{
+				approved,
+				changesRequested,
+				reviewRequested,
+				draft,
+				issue,
+			},
+		},
+	})
+
+	view := current.View().Content
+	for _, value := range []string{
+		ansiGreen + "Approved" + ansiReset,
+		ansiRed + "Changes requested" + ansiReset,
+		ansiYellow + "Review requested" + ansiReset,
+		ansiDim + "Draft" + ansiReset,
+		ansiGreen + "+10" + ansiReset,
+		ansiRed + "-2" + ansiReset,
+		"\x1b[97m\x1b[48;2;215;58;74m bug " + ansiReset,
+		"\x1b[30m\x1b[48;2;254;242;192m docs " + ansiReset,
+	} {
+		if !strings.Contains(view, value) {
+			t.Fatalf("View() missing color sequence %q:\n%s", value, view)
+		}
+	}
+}
+
 func TestModelTriggersSyncAndOpensSelectedItem(t *testing.T) {
 	t.Parallel()
 
