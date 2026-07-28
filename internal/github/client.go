@@ -509,11 +509,16 @@ func (c *Client) FetchLatestActivities(
 		activity := activities[target.NodeID]
 		etag := target.ETag
 		if target.Kind == model.ItemKindPullRequest {
+			requestETag := ""
+			if target.LatestActivity != nil &&
+				target.LatestActivity.Kind == "review_comment" {
+				requestETag = target.ETag
+			}
 			inline, responseETag, unchanged, err := c.fetchLatestReviewComment(
 				ctx,
 				target.Repository,
 				target.Number,
-				target.ETag,
+				requestETag,
 			)
 			if err != nil {
 				return nil, fmt.Errorf(
@@ -523,11 +528,14 @@ func (c *Client) FetchLatestActivities(
 				)
 			}
 			etag = responseETag
-			if unchanged && target.LatestActivity != nil &&
-				target.LatestActivity.Kind == "review_comment" {
+			if unchanged {
 				inline = target.LatestActivity
 			}
 			activity = laterActivity(activity, inline)
+			if activity != nil && inline != nil &&
+				inline.OccurredAt.Equal(activity.OccurredAt) {
+				activity = inline
+			}
 		}
 		results = append(results, model.ActivityResult{
 			Activity: activity,
@@ -560,20 +568,47 @@ func (c *Client) fetchLatestReviewComment(
 	query.Set("per_page", "1")
 	endpoint.RawQuery = query.Encode()
 
-	comments, responseETag, unchanged, err := fetchConditionalPage[reviewCommentResponse](
+	request, err := http.NewRequestWithContext(
 		ctx,
-		c,
-		endpoint,
-		etag,
+		http.MethodGet,
+		endpoint.String(),
+		nil,
 	)
 	if err != nil {
-		return nil, responseETag, false, fmt.Errorf(
-			"fetch GitHub review comments: %w",
-			err,
-		)
+		return nil, etag, false, fmt.Errorf("create GitHub request: %w", err)
 	}
-	if unchanged {
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
+	request.Header.Set("User-Agent", "gh-workbench")
+	if etag != "" {
+		request.Header.Set("If-None-Match", etag)
+	}
+
+	response, err := c.do(request)
+	if err != nil {
+		return nil, etag, false, fmt.Errorf("send GitHub request: %w", err)
+	}
+	responseETag := etag
+	if currentETag := response.Header.Get("ETag"); currentETag != "" {
+		responseETag = currentETag
+	}
+	if response.StatusCode == http.StatusNotModified {
+		_ = response.Body.Close()
 		return nil, responseETag, true, nil
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		err := responseError(response)
+		_ = response.Body.Close()
+		return nil, responseETag, false, err
+	}
+
+	var comments []reviewCommentResponse
+	if err := json.NewDecoder(response.Body).Decode(&comments); err != nil {
+		_ = response.Body.Close()
+		return nil, responseETag, false, fmt.Errorf("decode GitHub response: %w", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		return nil, responseETag, false, fmt.Errorf("close GitHub response: %w", err)
 	}
 	if len(comments) == 0 {
 		return nil, responseETag, false, nil
@@ -594,57 +629,6 @@ func (c *Client) fetchLatestReviewComment(
 		OccurredAt: occurredAt,
 		URL:        comment.HTMLURL,
 	}, responseETag, false, nil
-}
-
-func fetchConditionalPage[T any](
-	ctx context.Context,
-	client *Client,
-	endpoint *url.URL,
-	etag string,
-) ([]T, string, bool, error) {
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		endpoint.String(),
-		nil,
-	)
-	if err != nil {
-		return nil, etag, false, fmt.Errorf("create GitHub request: %w", err)
-	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
-	request.Header.Set("User-Agent", "gh-workbench")
-	if etag != "" {
-		request.Header.Set("If-None-Match", etag)
-	}
-
-	response, err := client.do(request)
-	if err != nil {
-		return nil, etag, false, fmt.Errorf("send GitHub request: %w", err)
-	}
-	responseETag := etag
-	if currentETag := response.Header.Get("ETag"); currentETag != "" {
-		responseETag = currentETag
-	}
-	if response.StatusCode == http.StatusNotModified {
-		_ = response.Body.Close()
-		return nil, responseETag, true, nil
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		err := responseError(response)
-		_ = response.Body.Close()
-		return nil, responseETag, false, err
-	}
-
-	values := make([]T, 0)
-	if err := json.NewDecoder(response.Body).Decode(&values); err != nil {
-		_ = response.Body.Close()
-		return nil, responseETag, false, fmt.Errorf("decode GitHub response: %w", err)
-	}
-	if err := response.Body.Close(); err != nil {
-		return nil, responseETag, false, fmt.Errorf("close GitHub response: %w", err)
-	}
-	return values, responseETag, false, nil
 }
 
 func (c *Client) fetchActivityBatch(
