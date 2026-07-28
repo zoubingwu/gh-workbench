@@ -40,4 +40,20 @@ describe("WorkItemRow", () => {
     expect(markup).toContain('rel="noopener noreferrer"');
     expect(markup.match(/<a\b/g)).toHaveLength(1);
   });
+
+  it("omits the redundant open status badge for issues", () => {
+    const markup = renderToStaticMarkup(
+      <WorkItemRow
+        item={{
+          ...item,
+          kind: "issue",
+          title: "Track API errors",
+          url: "https://github.com/acme/web/issues/42",
+        }}
+        now={Date.parse("2026-07-28T00:00:00Z")}
+      />,
+    );
+
+    expect(markup).not.toContain('class="status-badge"');
+  });
 });

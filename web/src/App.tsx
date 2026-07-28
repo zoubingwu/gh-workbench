@@ -79,9 +79,9 @@ function WorkItemIcon({ kind }: { kind: WorkItem["kind"] }) {
 
 export function WorkItemRow({ item, now }: { item: WorkItem; now: number }) {
   const reactions = groupedReactions(item.reactions);
-  const status = workItemStatus(item);
   const inactive = isInactive(item.updatedAt, now);
-  const hasDiffStats = item.kind === "pull_request";
+  const isPullRequest = item.kind === "pull_request";
+  const status = isPullRequest ? workItemStatus(item) : null;
 
   return (
     <a
@@ -90,24 +90,24 @@ export function WorkItemRow({ item, now }: { item: WorkItem; now: number }) {
       target="_blank"
       rel="noopener noreferrer"
     >
-      <span className={`item-icon item-icon-${item.kind}`} data-status={status}>
+      <span className={`item-icon item-icon-${item.kind}`} data-status={status ?? undefined}>
         <WorkItemIcon kind={item.kind} />
       </span>
       <div className="item-body">
         <div className="item-heading">
           <div className="item-main">
             <span className="item-title">{item.title}</span>
-            <div className="item-summary">
-              <span className="status-badge" data-kind={item.kind} data-status={status}>
-                {status}
-              </span>
-              {hasDiffStats ? (
+            {isPullRequest ? (
+              <div className="item-summary">
+                <span className="status-badge" data-status={status}>
+                  {status}
+                </span>
                 <span className="diff-stats" title="Pull request diff">
                   <span className="additions">+{item.additions}</span>
                   <span className="deletions">-{item.deletions}</span>
                 </span>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
           </div>
         </div>
 

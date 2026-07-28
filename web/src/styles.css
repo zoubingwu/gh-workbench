@@ -413,14 +413,8 @@ h1 {
   line-height: 18px;
 }
 
-.status-badge[data-kind="issue"][data-status="Open"],
+.status-badge[data-status="Open"],
 .status-badge[data-status="Approved"] {
-  color: var(--success-fg);
-  border-color: rgba(31, 136, 61, 0.4);
-  background: #dafbe1;
-}
-
-.status-badge[data-kind="pull_request"][data-status="Open"] {
   color: var(--success-fg);
   border-color: rgba(31, 136, 61, 0.4);
   background: #dafbe1;
