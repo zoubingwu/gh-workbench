@@ -618,6 +618,71 @@ func TestForceDueRefreshesSearchAndReactions(t *testing.T) {
 	}
 }
 
+func TestSnapshotReportsActivityPollError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(filepath.Join(t.TempDir(), "workbench.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	now := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
+	host := "github.com"
+	if err := database.EnsureAccount(ctx, host, now); err != nil {
+		t.Fatalf("EnsureAccount() error = %v", err)
+	}
+	item := model.WorkItem{
+		NodeID:        "I_kwDOExample",
+		RepositoryKey: "github.com/acme/api",
+		Number:        7,
+		Kind:          model.ItemKindIssue,
+		Title:         "Track retries",
+		URL:           "https://github.com/acme/api/issues/7",
+		State:         "open",
+		Author:        "octocat",
+		CreatedAt:     now.Add(-time.Hour),
+		UpdatedAt:     now,
+	}
+	if _, err := database.ReplaceRelevantOpenItems(
+		ctx,
+		host,
+		[]model.WorkItem{item},
+		now,
+	); err != nil {
+		t.Fatalf("ReplaceRelevantOpenItems() error = %v", err)
+	}
+	resources, err := database.ListDueResources(ctx, host, now, 10)
+	if err != nil {
+		t.Fatalf("ListDueResources() error = %v", err)
+	}
+	for _, resource := range resources {
+		if resource.Kind != model.ResourceKindActivity {
+			continue
+		}
+		resource.LastError = "fetch latest activity"
+		if err := database.SavePollResource(ctx, resource); err != nil {
+			t.Fatalf("SavePollResource() error = %v", err)
+		}
+	}
+
+	snapshot, err := database.Snapshot(ctx, host, false, now)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if snapshot.Sync.Error != "acme/api: fetch latest activity" {
+		t.Fatalf(
+			"Snapshot().Sync.Error = %q, want acme/api: fetch latest activity",
+			snapshot.Sync.Error,
+		)
+	}
+}
+
 func TestStaleReactionPollDoesNotOverwriteHotReset(t *testing.T) {
 	t.Parallel()
 

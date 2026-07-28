@@ -1087,15 +1087,15 @@ func (s *Store) Snapshot(
 
 	lastSuccess := syncResource.LastSuccessAt
 	syncError := syncResource.LastError
-	reactionErrorKey := ""
+	itemErrorKey := ""
 	for key, resource := range resources {
 		if syncError != "" ||
-			resource.Kind != model.ResourceKindReactions ||
+			resource.Kind == model.ResourceKindWorkItems ||
 			resource.LastError == "" ||
-			(reactionErrorKey != "" && key >= reactionErrorKey) {
+			(itemErrorKey != "" && key >= itemErrorKey) {
 			continue
 		}
-		reactionErrorKey = key
+		itemErrorKey = key
 		syncError = resource.LastError
 		if repository, err := model.ParseRepositoryKey(resource.Repository); err == nil {
 			syncError = repository.FullName() + ": " + syncError
