@@ -39,20 +39,34 @@ func (m terminalModel) View() tea.View {
 	lines = append(lines, m.filterLine())
 	lines = append(lines, style(strings.Repeat("─", max(m.width, 1)), ansiDim))
 
+	tail := make([]string, 0, 4)
+	if m.action != "" {
+		tail = append(
+			tail,
+			"",
+			style(terminalText(m.action), ansiCyan),
+		)
+	}
+	tail = append(tail, "", style(
+		"↑/k ↓/j move  1–3 filter  m mine  i inactive  r sync  enter/o open  q quit",
+		ansiDim,
+	))
+
 	items := m.visibleItems()
 	if m.loaded && len(items) == 0 {
 		lines = append(lines, "", style(m.emptyLine(), ansiDim))
 	} else {
-		lines = append(lines, m.itemLines(items)...)
+		lines = append(lines, m.itemLines(items, m.listHeight())...)
 	}
 
-	if m.action != "" {
-		lines = append(lines, "", style(terminalText(m.action), ansiCyan))
+	for len(lines)+len(tail) < m.height {
+		lines = append(lines, "")
 	}
-	lines = append(lines, "", style(
-		"↑/k ↓/j move  1–3 filter  m mine  i inactive  r sync  enter/o open  q quit",
-		ansiDim,
-	))
+	lines = append(lines, tail...)
+	if m.height > 0 && len(lines) > m.height {
+		footer := lines[len(lines)-1]
+		lines = append(lines[:m.height-1], footer)
+	}
 
 	for index := range lines {
 		lines[index] = truncate(lines[index], m.width)
@@ -125,15 +139,15 @@ func (m terminalModel) filterLabel(
 	return value
 }
 
-func (m terminalModel) itemLines(items []model.WorkItem) []string {
-	if len(items) == 0 {
+func (m terminalModel) itemLines(
+	items []model.WorkItem,
+	lineBudget int,
+) []string {
+	if len(items) == 0 || lineBudget < 1 {
 		return nil
 	}
 
-	pageSize := m.pageSize()
-	start := m.cursor - pageSize/2
-	start = min(max(start, 0), max(len(items)-pageSize, 0))
-	end := min(start+pageSize, len(items))
+	start, end := m.visibleItemRange(items, lineBudget)
 	repositoryCounts := make(map[string]int)
 	for _, item := range items {
 		repositoryCounts[item.Repository]++
@@ -156,20 +170,66 @@ func (m terminalModel) itemLines(items []model.WorkItem) []string {
 		selected := index == m.cursor
 		lines = append(lines, m.itemTitleLine(item, selected))
 		lines = append(lines, m.itemDetailLine(item, selected))
-		if selected {
-			lines = append(lines, m.selectedDetailLines(item)...)
-		}
 	}
 
 	if start > 0 || end < len(items) {
-		lines = append(lines, style(fmt.Sprintf(
-			"Showing %d–%d of %d items",
-			start+1,
-			end,
-			len(items),
-		), ansiDim))
+		if len(lines) < lineBudget {
+			lines = append(lines, style(fmt.Sprintf(
+				"Showing %d–%d of %d items",
+				start+1,
+				end,
+				len(items),
+			), ansiDim))
+		}
 	}
 	return lines
+}
+
+func (m terminalModel) visibleItemRange(
+	items []model.WorkItem,
+	lineBudget int,
+) (int, int) {
+	cursor := min(max(m.cursor, 0), len(items)-1)
+	start, end := cursor, cursor+1
+	for start > 0 &&
+		itemRangeLineCount(items, start-1, end) <= lineBudget {
+		start--
+	}
+	for end < len(items) &&
+		itemRangeLineCount(items, start, end+1) <= lineBudget {
+		end++
+	}
+	return start, end
+}
+
+func itemRangeLineCount(
+	items []model.WorkItem,
+	start int,
+	end int,
+) int {
+	const itemLineCount = 2
+
+	lines := (end - start) * itemLineCount
+	previousRepository := ""
+	for index := start; index < end; index++ {
+		if items[index].Repository == previousRepository {
+			continue
+		}
+		lines += 2
+		previousRepository = items[index].Repository
+	}
+	return lines
+}
+
+func (m terminalModel) listHeight() int {
+	fixedLines := 6
+	if m.errorLine() != "" {
+		fixedLines++
+	}
+	if m.action != "" {
+		fixedLines += 2
+	}
+	return max(m.height-fixedLines, 1)
 }
 
 func (m terminalModel) itemTitleLine(
@@ -186,6 +246,7 @@ func (m terminalModel) itemTitleLine(
 	}
 
 	line := fmt.Sprintf("%s %s %s", pointer, icon, terminalText(item.Title))
+	line = joinItemSummary(line, itemSummary(item), m.width)
 	if selected {
 		return style(line, ansiReverse)
 	}
@@ -200,59 +261,58 @@ func (m terminalModel) itemDetailLine(
 	if author == "" {
 		author = "ghost"
 	}
-	line := fmt.Sprintf(
-		"    #%d · opened by %s · updated %s",
-		item.Number,
-		author,
-		relativeTime(item.UpdatedAt, m.now()),
-	)
+	parts := []string{
+		fmt.Sprintf("#%d", item.Number),
+		"opened by " + author,
+		"updated " + relativeTime(item.UpdatedAt, m.now()),
+	}
+	if latest := item.LatestActivity; latest != nil {
+		actor := terminalText(latest.Actor)
+		if actor == "" {
+			actor = "ghost"
+		}
+		activity := actor + " " + activityVerb(latest.Kind)
+		if latest.BodyText != "" {
+			activity += ": " + terminalText(latest.BodyText)
+		}
+		parts = append(parts, activity)
+	}
+	if reactions := reactionSummary(item.Reactions); reactions != "" {
+		parts = append(parts, reactions)
+	}
+	if item.Poll.Error != "" {
+		parts = append(
+			parts,
+			"Poll error: "+terminalText(item.Poll.Error),
+		)
+	}
+	line := "    " + strings.Join(parts, " · ")
 	if selected {
 		return style(line, ansiReverse)
 	}
 	return style(line, ansiDim)
 }
 
-func (m terminalModel) selectedDetailLines(item model.WorkItem) []string {
-	summary := "      Labels: " + labelSummary(item.Labels)
+func itemSummary(item model.WorkItem) string {
 	if item.Kind == model.ItemKindPullRequest {
-		summary = fmt.Sprintf(
-			"      Status: %s · Changes: %s+%d%s %s-%d%s",
+		return fmt.Sprintf(
+			"Status: %s · Changes: +%d -%d",
 			workItemStatus(item),
-			ansiGreen,
 			item.Additions,
-			ansiReset,
-			ansiRed,
 			item.Deletions,
-			ansiReset,
 		)
 	}
+	return "Labels: " + labelSummary(item.Labels)
+}
 
-	activity := "none"
-	if latest := item.LatestActivity; latest != nil {
-		actor := terminalText(latest.Actor)
-		if actor == "" {
-			actor = "ghost"
-		}
-		activity = actor + " " + activityVerb(latest.Kind)
-		if latest.BodyText != "" {
-			activity += ": " + terminalText(latest.BodyText)
-		}
+func joinItemSummary(prefix, summary string, width int) string {
+	separator := "  ·  "
+	suffix := separator + summary
+	prefixWidth := width - ansi.StringWidth(suffix)
+	if prefixWidth < 1 {
+		return prefix + suffix
 	}
-
-	reactions := reactionSummary(item.Reactions)
-	if reactions == "" {
-		reactions = "none"
-	}
-	polling := "healthy"
-	if item.Poll.Error != "" {
-		polling = terminalText(item.Poll.Error)
-	}
-	return []string{
-		style(summary, ansiDim),
-		style("      Activity: "+activity, ansiDim),
-		style("      Reactions: "+reactions, ansiDim),
-		style("      Polling: "+polling, ansiDim),
-	}
+	return truncate(prefix, prefixWidth) + suffix
 }
 
 func labelSummary(labels []model.Label) string {

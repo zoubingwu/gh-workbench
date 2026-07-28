@@ -328,7 +328,7 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 	}
 }
 
-func TestViewFitsTerminalHeight(t *testing.T) {
+func TestViewFillsTerminalHeight(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -362,8 +362,8 @@ func TestViewFitsTerminalHeight(t *testing.T) {
 	current.action = "Sync requested"
 
 	lines := strings.Split(current.View().Content, "\n")
-	if len(lines) > 24 {
-		t.Fatalf("view height = %d, want <= 24:\n%s", len(lines), current.View().Content)
+	if len(lines) != 24 {
+		t.Fatalf("view height = %d, want 24:\n%s", len(lines), current.View().Content)
 	}
 }
 
@@ -506,7 +506,7 @@ func TestTerminalTextRemovesTerminalControlSequences(t *testing.T) {
 	}
 }
 
-func TestSelectedItemKeepsStructuredDetailsVisible(t *testing.T) {
+func TestSelectedItemUsesCompactBrowserRow(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -520,21 +520,21 @@ func TestSelectedItemKeepsStructuredDetailsVisible(t *testing.T) {
 		"alice",
 		now,
 	)
-	item.Title = strings.Repeat("long title ", 20)
+	item.Title = "Compact work item"
 	item.ReviewDecision = "APPROVED"
 	item.Additions = 10
 	item.Deletions = 2
 	item.LatestActivity = &model.Activity{
 		Kind:     "comment",
 		Actor:    "bob",
-		BodyText: strings.Repeat("long activity ", 20),
+		BodyText: "looks good",
 	}
 	item.Reactions = []model.Reaction{
 		{Content: "eyes"},
 	}
 	item.Poll.Error = "rate limited"
 	current = updateModel(t, current, tea.WindowSizeMsg{
-		Width:  60,
+		Width:  160,
 		Height: 24,
 	})
 	current = updateModel(t, current, snapshotLoadedMsg{
@@ -545,17 +545,91 @@ func TestSelectedItemKeepsStructuredDetailsVisible(t *testing.T) {
 		},
 	})
 
-	view := current.View().Content
+	lines := strings.Split(ansi.Strip(current.View().Content), "\n")
+	titleIndex := lineContaining(t, lines, "Compact work item")
+	row := strings.Join(lines[titleIndex:titleIndex+2], "\n")
 	for _, value := range []string{
 		"Status: Approved",
-		"Changes:",
-		"Activity:",
-		"Reactions:",
-		"Polling: rate limited",
+		"+10",
+		"-2",
+		"bob commented: looks good",
+		"👀 1",
+		"Poll error: rate limited",
 	} {
-		if !strings.Contains(view, value) {
-			t.Fatalf("View() missing %q:\n%s", value, view)
+		if !strings.Contains(row, value) {
+			t.Fatalf("compact row missing %q:\n%s", value, row)
 		}
+	}
+}
+
+func TestViewKeepsStructuredDetailsVisibleForEveryItem(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	first := workItem(
+		"acme/api",
+		7,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	second := workItem(
+		"acme/api",
+		8,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	second.Title = "Second work item"
+	second.ReviewDecision = "CHANGES_REQUESTED"
+	second.Additions = 22
+	second.Deletions = 3
+	second.LatestActivity = &model.Activity{
+		Kind:     "review_approved",
+		Actor:    "carol",
+		BodyText: "ready to merge",
+	}
+	second.Reactions = []model.Reaction{
+		{Content: "rocket"},
+	}
+	second.Poll.Error = "secondary poll failed"
+
+	current = updateModel(t, current, tea.WindowSizeMsg{
+		Width:  180,
+		Height: 40,
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items:       []model.WorkItem{first, second},
+		},
+	})
+
+	lines := strings.Split(ansi.Strip(current.View().Content), "\n")
+	titleIndex := lineContaining(t, lines, "Second work item")
+	if titleIndex+2 >= len(lines) {
+		t.Fatalf("compact row ended outside rendered view:\n%s", strings.Join(lines, "\n"))
+	}
+	row := strings.Join(lines[titleIndex:titleIndex+2], "\n")
+	for _, value := range []string{
+		"Second work item",
+		"Status: Changes requested",
+		"+22",
+		"-3",
+		"carol approved: ready to merge",
+		"🚀 1",
+		"Poll error: secondary poll failed",
+	} {
+		if !strings.Contains(row, value) {
+			t.Fatalf("compact row missing unselected item detail %q:\n%s", value, row)
+		}
+	}
+	if nextLine := strings.TrimSpace(lines[titleIndex+2]); nextLine != "" {
+		t.Fatalf("compact row uses more than two lines: %q", nextLine)
 	}
 }
 
@@ -666,6 +740,18 @@ func keyPress(value string) tea.KeyPressMsg {
 		Text: value,
 		Code: runes[0],
 	})
+}
+
+func lineContaining(t *testing.T, lines []string, value string) int {
+	t.Helper()
+
+	for index, line := range lines {
+		if strings.Contains(line, value) {
+			return index
+		}
+	}
+	t.Fatalf("rendered lines missing %q:\n%s", value, strings.Join(lines, "\n"))
+	return 0
 }
 
 func workItem(

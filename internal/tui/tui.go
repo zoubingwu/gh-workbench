@@ -356,5 +356,10 @@ func itemKey(item model.WorkItem) string {
 }
 
 func (m terminalModel) pageSize() int {
-	return max(1, (m.height-14)/5)
+	items := m.visibleItems()
+	if len(items) == 0 {
+		return 1
+	}
+	start, end := m.visibleItemRange(items, m.listHeight())
+	return max(1, end-start)
 }
