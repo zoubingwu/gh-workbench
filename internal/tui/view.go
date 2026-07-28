@@ -16,8 +16,6 @@ const (
 	ansiReset       = "\x1b[0m"
 	ansiBold        = "\x1b[1m"
 	ansiDim         = "\x1b[2m"
-	ansiReverse     = "\x1b[7m"
-	ansiNoReverse   = "\x1b[27m"
 	ansiBlack       = "\x1b[30m"
 	ansiRed         = "\x1b[31m"
 	ansiGreen       = "\x1b[32m"
@@ -242,24 +240,21 @@ func (m terminalModel) itemTitleLine(
 	item model.WorkItem,
 	selected bool,
 ) string {
-	pointer := " "
-	if selected {
-		pointer = "›"
-	}
 	icon := "●"
 	if item.Kind == model.ItemKindPullRequest {
 		icon = "⑂"
 	}
+	title := terminalText(item.Title)
+	if selected {
+		title = style(title, ansiBold)
+	}
 
-	line := fmt.Sprintf("%s %s %s", pointer, icon, terminalText(item.Title))
+	line := fmt.Sprintf("%s %s %s", selectionRail(selected), icon, title)
 	line = joinItemSummary(
 		line,
-		itemSummary(item, selected),
+		itemSummary(item),
 		m.width,
 	)
-	if selected {
-		return style(line, ansiReverse)
-	}
 	return line
 }
 
@@ -296,32 +291,34 @@ func (m terminalModel) itemDetailLine(
 			"Poll error: "+terminalText(item.Poll.Error),
 		)
 	}
-	line := "    " + strings.Join(parts, " · ")
-	if selected {
-		return style(line, ansiReverse)
-	}
-	return style(line, ansiDim)
+	line := strings.Join(parts, " · ")
+	return selectionRail(selected) + "   " + style(line, ansiDim)
 }
 
-func itemSummary(item model.WorkItem, selected bool) string {
+func selectionRail(selected bool) string {
+	if selected {
+		return style("▌", ansiCyan)
+	}
+	return " "
+}
+
+func itemSummary(item model.WorkItem) string {
 	if item.Kind == model.ItemKindPullRequest {
 		status := workItemStatus(item)
 		return "Status: " +
-			coloredText(status, statusColor(status), selected) +
+			style(status, statusColor(status)) +
 			" · Changes: " +
-			coloredText(
+			style(
 				"+"+strconv.Itoa(item.Additions),
 				ansiGreen,
-				selected,
 			) +
 			" " +
-			coloredText(
+			style(
 				"-"+strconv.Itoa(item.Deletions),
 				ansiRed,
-				selected,
 			)
 	}
-	return "Labels: " + labelSummary(item.Labels, selected)
+	return "Labels: " + labelSummary(item.Labels)
 }
 
 func joinItemSummary(prefix, summary string, width int) string {
@@ -334,13 +331,13 @@ func joinItemSummary(prefix, summary string, width int) string {
 	return truncate(prefix, prefixWidth) + suffix
 }
 
-func labelSummary(labels []model.Label, selected bool) string {
+func labelSummary(labels []model.Label) string {
 	if len(labels) == 0 {
 		return "none"
 	}
 	values := make([]string, 0, len(labels))
 	for _, label := range labels {
-		values = append(values, labelText(label, selected))
+		values = append(values, labelText(label))
 	}
 	return strings.Join(values, " ")
 }
@@ -360,17 +357,7 @@ func statusColor(status string) string {
 	}
 }
 
-func coloredText(value, color string, selected bool) string {
-	prefix := ""
-	suffix := ansiReset
-	if selected {
-		prefix = ansiNoReverse
-		suffix += ansiReverse
-	}
-	return prefix + color + value + suffix
-}
-
-func labelText(label model.Label, selected bool) string {
+func labelText(label model.Label) string {
 	color := strings.TrimPrefix(strings.TrimSpace(label.Color), "#")
 	value, err := strconv.ParseUint(color, 16, 24)
 	if err != nil || len(color) != 6 {
@@ -386,25 +373,17 @@ func labelText(label model.Label, selected bool) string {
 		foreground = ansiBlack
 	}
 
-	prefix := ""
-	suffix := ansiReset
-	if selected {
-		prefix = ansiNoReverse
-		suffix += ansiReverse
-	}
 	background := fmt.Sprintf(
 		"\x1b[48;2;%d;%d;%dm",
 		red,
 		green,
 		blue,
 	)
-	return prefix +
-		foreground +
-		background +
-		" " +
-		terminalText(label.Name) +
-		" " +
-		suffix
+	return style(
+		" "+terminalText(label.Name)+" ",
+		foreground,
+		background,
+	)
 }
 
 func (m terminalModel) emptyLine() string {

@@ -788,6 +788,106 @@ func TestViewColorsStatusesChangesAndLabels(t *testing.T) {
 	}
 }
 
+func TestViewMovesTwoLineSelectionRailWithoutMaskingSemanticColors(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	approved := workItem(
+		"acme/api",
+		1,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	approved.Title = "Approved item"
+	approved.ReviewDecision = "APPROVED"
+	approved.Additions = 10
+	approved.Deletions = 2
+
+	changesRequested := workItem(
+		"acme/api",
+		2,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	changesRequested.Title = "Changes requested item"
+	changesRequested.ReviewDecision = "CHANGES_REQUESTED"
+	changesRequested.Additions = 5
+	changesRequested.Deletions = 1
+
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, tea.WindowSizeMsg{
+		Width:  180,
+		Height: 24,
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items: []model.WorkItem{
+				approved,
+				changesRequested,
+			},
+		},
+	})
+
+	assertSelectedRow := func(title string, colors []string) {
+		t.Helper()
+
+		view := current.View().Content
+		lines := strings.Split(view, "\n")
+		titleIndex := lineContaining(t, lines, title)
+		row := strings.Join(lines[titleIndex:titleIndex+2], "\n")
+		for index, line := range strings.Split(ansi.Strip(row), "\n") {
+			if !strings.HasPrefix(line, "▌") {
+				t.Fatalf(
+					"selected row line %d missing selection rail: %q",
+					index+1,
+					line,
+				)
+			}
+		}
+		for _, color := range colors {
+			if !strings.Contains(row, color) {
+				t.Fatalf(
+					"selected row missing semantic color %q:\n%s",
+					color,
+					row,
+				)
+			}
+		}
+		if strings.Contains(row, "\x1b[7m") {
+			t.Fatalf("selected row uses reverse video:\n%s", row)
+		}
+	}
+
+	assertSelectedRow("Approved item", []string{
+		ansiGreen + "Approved" + ansiReset,
+		ansiGreen + "+10" + ansiReset,
+		ansiRed + "-2" + ansiReset,
+	})
+
+	current = updateModel(t, current, keyPress("j"))
+	assertSelectedRow("Changes requested item", []string{
+		ansiRed + "Changes requested" + ansiReset,
+		ansiGreen + "+5" + ansiReset,
+		ansiRed + "-1" + ansiReset,
+	})
+
+	lines := strings.Split(ansi.Strip(current.View().Content), "\n")
+	firstIndex := lineContaining(t, lines, "Approved item")
+	for _, line := range lines[firstIndex : firstIndex+2] {
+		if strings.HasPrefix(line, "▌") {
+			t.Fatalf("previous row retained selection rail: %q", line)
+		}
+	}
+}
+
 func TestModelTriggersSyncAndOpensSelectedItem(t *testing.T) {
 	t.Parallel()
 
