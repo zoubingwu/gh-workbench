@@ -1006,6 +1006,14 @@ func TestClientFetchLatestActivitiesUsesNewestInlineReviewComment(t *testing.T) 
 			if request.Method != http.MethodGet {
 				t.Fatalf("review comment method = %q, want GET", request.Method)
 			}
+			wantAccept := "application/vnd.github-commitcomment.text+json"
+			if request.Header.Get("Accept") != wantAccept {
+				t.Fatalf(
+					"review comment Accept = %q, want %q",
+					request.Header.Get("Accept"),
+					wantAccept,
+				)
+			}
 			wantQuery := "direction=desc&per_page=1&sort=updated"
 			if request.URL.RawQuery != wantQuery {
 				t.Fatalf("review comment query = %q, want %q", request.URL.RawQuery, wantQuery)
@@ -1082,6 +1090,68 @@ func TestClientFetchLatestActivitiesUsesNewestInlineReviewComment(t *testing.T) 
 		t.Fatalf(
 			"review comment request count = %d, want 1",
 			reviewCommentRequests.Load(),
+		)
+	}
+}
+
+func TestClientFetchLatestActivitiesDoesNotExposeRawReviewCommentMarkdown(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/graphql":
+			_, _ = io.WriteString(response, `{"data":{"nodes":[{
+				"id":"PR_rocket_7",
+				"url":"https://github.com/acme/rocket/pull/7",
+				"comments":{"nodes":[]},
+				"timelineItems":{"nodes":[]}
+			}]}}`)
+		case "/repos/acme/rocket/pulls/7/comments":
+			if request.Header.Get("Accept") !=
+				"application/vnd.github-commitcomment.text+json" {
+				t.Fatalf("review comment Accept = %q", request.Header.Get("Accept"))
+			}
+			_, _ = io.WriteString(response, `[{
+				"user":{"login":"reviewer"},
+				"body":"**<sub>![P2 Badge](https://example.com/p2.svg)</sub>**",
+				"created_at":"2026-07-28T10:20:00Z",
+				"updated_at":"2026-07-28T10:30:00Z",
+				"html_url":"https://github.com/acme/rocket/pull/7#discussion_r42"
+			}]`)
+		default:
+			t.Fatalf("request path = %q, want GraphQL or review comments", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithBaseURL(server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+	client.gate.interval = 0
+
+	results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		NodeID:     "PR_rocket_7",
+		Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:     7,
+		Kind:       model.ItemKindPullRequest,
+	}})
+	if err != nil {
+		t.Fatalf("FetchLatestActivities() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Activity == nil {
+		t.Fatalf("latest activity = %#v, want review comment", results)
+	}
+	if results[0].Activity.BodyText != "" {
+		t.Fatalf(
+			"latest activity body = %q, want empty without body_text",
+			results[0].Activity.BodyText,
 		)
 	}
 }

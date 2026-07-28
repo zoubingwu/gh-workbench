@@ -575,7 +575,7 @@ func (c *Client) fetchLatestReviewComment(
 	if err != nil {
 		return nil, etag, false, fmt.Errorf("create GitHub request: %w", err)
 	}
-	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("Accept", "application/vnd.github-commitcomment.text+json")
 	request.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
 	request.Header.Set("User-Agent", "gh-workbench")
 	if etag != "" {
@@ -616,14 +616,10 @@ func (c *Client) fetchLatestReviewComment(
 	if occurredAt.IsZero() {
 		occurredAt = comment.CreatedAt
 	}
-	bodyText := comment.BodyText
-	if bodyText == "" {
-		bodyText = comment.Body
-	}
 	return &model.Activity{
 		Kind:       "review_comment",
 		Actor:      login(comment.User),
-		BodyText:   normalizeActivityBody(bodyText),
+		BodyText:   normalizeActivityBody(comment.BodyText),
 		OccurredAt: occurredAt,
 		URL:        comment.HTMLURL,
 	}, responseETag, false, nil
@@ -1309,7 +1305,6 @@ type reactionResponse struct {
 
 type reviewCommentResponse struct {
 	User      *userResponse `json:"user"`
-	Body      string        `json:"body"`
 	BodyText  string        `json:"body_text"`
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
