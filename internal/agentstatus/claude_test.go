@@ -118,7 +118,12 @@ func TestClaudeSourceReadsForegroundSessionMarkers(t *testing.T) {
 		}
 	}
 
-	observations, err := (&claudeSource{configDir: configDir}).scan(
+	observations, err := (&claudeSource{
+		configDir: configDir,
+		processAlive: func(int) bool {
+			return true
+		},
+	}).scan(
 		context.Background(),
 		time.Now(),
 	)
@@ -136,6 +141,41 @@ func TestClaudeSourceReadsForegroundSessionMarkers(t *testing.T) {
 		if observation.confidence != model.LocalAgentConfidenceHeuristic {
 			t.Fatalf("marker confidence = %q", observation.confidence)
 		}
+	}
+}
+
+func TestClaudeSourceRejectsDeadSessionMarkers(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	sessionsDir := filepath.Join(configDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
+		t.Fatalf("create sessions directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsDir, "101.json"), []byte(`{
+		"pid": 101,
+		"sessionId": "session-dead",
+		"cwd": "/workspace/rocket",
+		"kind": "interactive",
+		"status": "busy"
+	}`), 0o600); err != nil {
+		t.Fatalf("write session marker: %v", err)
+	}
+	checkedPID := 0
+	source := &claudeSource{
+		configDir: configDir,
+		processAlive: func(pid int) bool {
+			checkedPID = pid
+			return false
+		},
+	}
+
+	observations, err := source.scan(context.Background(), time.Now())
+	if err != nil {
+		t.Fatalf("scan() error = %v", err)
+	}
+	if len(observations) != 0 || checkedPID != 101 {
+		t.Fatalf("scan() = %#v, checked PID = %d", observations, checkedPID)
 	}
 }
 
@@ -209,6 +249,9 @@ func TestClaudeSourceKeepsMarkersWhenSupervisorIsUnavailable(t *testing.T) {
 	source := &claudeSource{
 		configDir: configDir,
 		binary:    "/usr/local/bin/claude",
+		processAlive: func(int) bool {
+			return true
+		},
 		output: func(
 			_ context.Context,
 			_ string,
@@ -253,6 +296,9 @@ func TestClaudeSourcePrefersSupportedSessionState(t *testing.T) {
 	source := &claudeSource{
 		configDir: configDir,
 		binary:    "/usr/local/bin/claude",
+		processAlive: func(int) bool {
+			return true
+		},
 		output: func(
 			_ context.Context,
 			_ string,
@@ -279,5 +325,49 @@ func TestClaudeSourcePrefersSupportedSessionState(t *testing.T) {
 		observations[0].state != model.LocalAgentStateNeedsInput ||
 		observations[0].confidence != model.LocalAgentConfidenceSupported {
 		t.Fatalf("scan() = %#v", observations)
+	}
+}
+
+func TestClaudeSourceReconcilesSuccessfulOfficialSnapshot(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	sessionsDir := filepath.Join(configDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
+		t.Fatalf("create sessions directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsDir, "101.json"), []byte(`{
+		"pid": 101,
+		"sessionId": "session-stale",
+		"cwd": "/workspace/rocket",
+		"kind": "interactive",
+		"status": "busy"
+	}`), 0o600); err != nil {
+		t.Fatalf("write session marker: %v", err)
+	}
+	source := &claudeSource{
+		configDir: configDir,
+		binary:    "/usr/local/bin/claude",
+		processAlive: func(int) bool {
+			return true
+		},
+		output: func(
+			_ context.Context,
+			_ string,
+			arguments ...string,
+		) ([]byte, error) {
+			if slices.Equal(arguments, []string{"daemon", "status"}) {
+				return []byte("running"), nil
+			}
+			return []byte(`[]`), nil
+		},
+	}
+
+	observations, err := source.scan(context.Background(), time.Now())
+	if err != nil {
+		t.Fatalf("scan() error = %v", err)
+	}
+	if len(observations) != 0 {
+		t.Fatalf("scan() = %#v, want authoritative empty snapshot", observations)
 	}
 }

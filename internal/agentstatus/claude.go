@@ -18,9 +18,10 @@ const claudeCommandTimeout = 2 * time.Second
 type commandOutput func(context.Context, string, ...string) ([]byte, error)
 
 type claudeSource struct {
-	configDir string
-	binary    string
-	output    commandOutput
+	configDir    string
+	binary       string
+	output       commandOutput
+	processAlive func(int) bool
 }
 
 type claudeSession struct {
@@ -38,7 +39,11 @@ func (s *claudeSource) scan(
 	ctx context.Context,
 	_ time.Time,
 ) ([]observation, error) {
-	markers, err := loadClaudeSessionMarkers(s.configDir)
+	processAlive := s.processAlive
+	if processAlive == nil {
+		processAlive = processIsAlive
+	}
+	markers, err := loadClaudeSessionMarkers(s.configDir, processAlive)
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +72,13 @@ func (s *claudeSource) scan(
 	if err != nil {
 		return markers, nil
 	}
-	return mergeClaudeObservations(markers, supported), nil
+	return supported, nil
 }
 
-func loadClaudeSessionMarkers(configDir string) ([]observation, error) {
+func loadClaudeSessionMarkers(
+	configDir string,
+	processAlive func(int) bool,
+) ([]observation, error) {
 	entries, err := os.ReadDir(filepath.Join(configDir, "sessions"))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -94,6 +102,9 @@ func loadClaudeSessionMarkers(configDir string) ([]observation, error) {
 		}
 		var session claudeSession
 		if err := json.Unmarshal(raw, &session); err != nil {
+			continue
+		}
+		if !processAlive(session.PID) {
 			continue
 		}
 		if current, ok := claudeObservation(
@@ -152,26 +163,6 @@ func claudeObservation(
 		state:      state,
 		confidence: confidence,
 	}, true
-}
-
-func mergeClaudeObservations(
-	heuristic []observation,
-	supported []observation,
-) []observation {
-	merged := append([]observation(nil), heuristic...)
-	indexBySession := make(map[string]int, len(merged))
-	for index, current := range merged {
-		indexBySession[current.sessionKey] = index
-	}
-	for _, current := range supported {
-		if index, ok := indexBySession[current.sessionKey]; ok {
-			merged[index] = current
-			continue
-		}
-		indexBySession[current.sessionKey] = len(merged)
-		merged = append(merged, current)
-	}
-	return merged
 }
 
 func claudeSessionKey(session claudeSession) string {

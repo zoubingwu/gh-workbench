@@ -133,12 +133,8 @@ func (s *codexSource) loadCandidates(
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}
-	databaseURL := &url.URL{Scheme: "file", Path: path}
-	query := databaseURL.Query()
-	query.Set("mode", "ro")
-	databaseURL.RawQuery = query.Encode()
 
-	database, err := sql.Open("sqlite", databaseURL.String())
+	database, err := sql.Open("sqlite", sqliteReadOnlyDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open Codex state database: %w", err)
 	}
@@ -182,6 +178,32 @@ func (s *codexSource) loadCandidates(
 		return nil, fmt.Errorf("iterate Codex threads: %w", err)
 	}
 	return candidates, nil
+}
+
+func sqliteReadOnlyDSN(path string) string {
+	return sqliteReadOnlyDSNFromSlashPath(filepath.ToSlash(path))
+}
+
+func sqliteReadOnlyDSNFromSlashPath(path string) string {
+	databaseURL := &url.URL{Scheme: "file"}
+	switch {
+	case isWindowsDrivePath(path):
+		databaseURL.Path = "/" + path
+	default:
+		databaseURL.Path = path
+	}
+	query := databaseURL.Query()
+	query.Set("mode", "ro")
+	databaseURL.RawQuery = query.Encode()
+	return databaseURL.String()
+}
+
+func isWindowsDrivePath(path string) bool {
+	if len(path) < 3 || path[1] != ':' || path[2] != '/' {
+		return false
+	}
+	drive := path[0]
+	return drive >= 'A' && drive <= 'Z' || drive >= 'a' && drive <= 'z'
 }
 
 func scanRollout(

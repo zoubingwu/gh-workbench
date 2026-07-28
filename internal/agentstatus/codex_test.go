@@ -109,6 +109,53 @@ func TestCodexSourceDropsStaleStartedTask(t *testing.T) {
 	}
 }
 
+func TestSQLiteReadOnlyDSN(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		slashPath string
+		want      string
+	}{
+		{
+			name:      "Unix path",
+			slashPath: "/Users/me/.codex/state_5.sqlite",
+			want:      "file:///Users/me/.codex/state_5.sqlite?mode=ro",
+		},
+		{
+			name:      "Windows drive path",
+			slashPath: "C:/Users/me/.codex/state_5.sqlite",
+			want:      "file:///C:/Users/me/.codex/state_5.sqlite?mode=ro",
+		},
+		{
+			name:      "Windows UNC path",
+			slashPath: "//server/share/.codex/state_5.sqlite",
+			want:      "file:////server/share/.codex/state_5.sqlite?mode=ro",
+		},
+		{
+			name:      "escaped path",
+			slashPath: "/Users/me/Codex Data/state_5.sqlite",
+			want:      "file:///Users/me/Codex%20Data/state_5.sqlite?mode=ro",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := sqliteReadOnlyDSNFromSlashPath(test.slashPath)
+			if got != test.want {
+				t.Fatalf(
+					"sqliteReadOnlyDSNFromSlashPath(%q) = %q, want %q",
+					test.slashPath,
+					got,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
 func createCodexStateDB(t *testing.T, root, rollout, cwd string) {
 	t.Helper()
 
