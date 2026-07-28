@@ -638,6 +638,44 @@ func TestSelectedItemUsesCompactBrowserRow(t *testing.T) {
 	}
 }
 
+func TestViewShowsLocalAgentActivity(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	item := workItem(
+		"acme/api",
+		7,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	item.LocalAgentActivity = &model.LocalAgentActivity{
+		State:        model.LocalAgentStateWorking,
+		Providers:    []string{"claude", "codex"},
+		SessionCount: 2,
+		Confidence:   model.LocalAgentConfidenceSupported,
+	}
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, tea.WindowSizeMsg{
+		Width:  120,
+		Height: 24,
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items:       []model.WorkItem{item},
+		},
+	})
+
+	view := ansi.Strip(current.View().Content)
+	if !strings.Contains(view, "◌ Claude + Codex working") {
+		t.Fatalf("View() missing local agent activity:\n%s", view)
+	}
+}
+
 func TestViewKeepsStructuredDetailsVisibleForEveryItem(t *testing.T) {
 	t.Parallel()
 

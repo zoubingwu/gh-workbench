@@ -23,9 +23,12 @@ isolated by GitHub host and viewer login.
 6. Each relevant pull request receives an independent REST reaction poll.
 7. SQLite stores GitHub data, ETags, cached commit and inline-review candidates,
    the next polling time, and account-scoped notification preferences.
-8. A bounded worker pool leases due resources and publishes aggregate snapshots
-   to browsers over WebSocket or refreshes the in-process TUI from SQLite.
-9. In browser mode, the coalesced snapshot publication path advances a Go
+8. A read-only local observer maps active coding-agent sessions to pull requests
+   through Git repository, branch, and commit identity.
+9. A bounded worker pool leases due resources and publishes aggregate snapshots
+   with ephemeral local-agent activity to browsers over WebSocket or refreshes
+   the in-process TUI from SQLite.
+10. In browser mode, the coalesced snapshot publication path advances a Go
    notification cursor and delivers enabled macOS system notifications.
 
 The scheduler treats every resource as a small state machine. A change heats the
@@ -42,10 +45,13 @@ remain within the scheduler until the queue becomes idle.
 - `cmd/gh-workbench` parses flags and handles process signals.
 - `internal/app` resolves the active account, wires concrete dependencies, and
   owns startup and shutdown.
+- `internal/agentstatus` discovers local Codex and Claude Code activity
+  read-only, resolves Git identity, and decorates snapshots without persistence.
 - `internal/github` is the only package that calls GitHub. GraphQL owns
   cross-repository discovery and batched activity refreshes; REST owns inline
   review-comment and pull-request reaction refreshes.
-- `internal/store` is the only package that reads or writes SQLite.
+- `internal/store` is the only package that reads or writes the Workbench SQLite
+  cache.
 - `internal/syncer` owns the global search resource, batched activity resources,
   pull-request reaction resources, polling cadence, and bounded concurrency.
 - `internal/server` owns the local HTTP/WebSocket protocol and session checks.

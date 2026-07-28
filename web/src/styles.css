@@ -477,6 +477,53 @@ h1 {
   background: #eff2f5;
 }
 
+.agent-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 20px;
+  padding: 0 7px;
+  border: 1px solid rgba(9, 105, 218, 0.35);
+  border-radius: 2em;
+  color: var(--fg-link);
+  background: #ddf4ff;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.agent-activity[data-state="needs_input"] {
+  color: var(--attention-fg);
+  border-color: rgba(191, 135, 0, 0.4);
+  background: #fff8c5;
+}
+
+.agent-activity-indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.agent-activity[data-state="working"][data-confidence="supported"] .agent-activity-indicator {
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  background: transparent;
+  animation: spin 850ms linear infinite;
+}
+
+.agent-activity[data-state="working"][data-confidence="heuristic"] .agent-activity-indicator {
+  animation: agent-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes agent-pulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.75);
+  }
+}
+
 .diff-stats {
   display: inline-flex;
   gap: 6px;
@@ -650,7 +697,8 @@ h1 {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .spinning {
+  .spinning,
+  .agent-activity-indicator {
     animation-duration: 0.01ms;
     animation-iteration-count: 1;
   }

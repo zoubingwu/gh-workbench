@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { filterItems, type ItemFilter } from "./filterItems";
 import { formatAbsoluteTime, formatRelativeTime, reactionSymbol } from "./format";
-import type { NotificationPreferences, Reaction, Snapshot, SnapshotEvent, WorkItem } from "./types";
+import type {
+  LocalAgentActivity,
+  NotificationPreferences,
+  Reaction,
+  Snapshot,
+  SnapshotEvent,
+  WorkItem,
+} from "./types";
 import {
   filterByActivity,
   filterByPullRequestAuthor,
@@ -116,6 +123,41 @@ function WorkItemIcon({ kind }: { kind: WorkItem["kind"] }) {
   );
 }
 
+function agentProviderLabel(provider: string) {
+  return provider.length > 0 ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Local agent";
+}
+
+function AgentActivity({ activity }: { activity: LocalAgentActivity }) {
+  const providers =
+    activity.providers.length > 0
+      ? activity.providers.map(agentProviderLabel).join(" + ")
+      : "Local agent";
+  const state = activity.state === "needs_input" ? "needs input" : "working";
+  const label = `${providers} ${state}`;
+  const sessions = `${activity.sessionCount} local ${
+    activity.sessionCount === 1 ? "session" : "sessions"
+  }`;
+  const source =
+    activity.confidence === "heuristic"
+      ? "Observed from local lifecycle records"
+      : "Reported by the local agent";
+  const title = `${label} · ${sessions} · ${source}`;
+
+  return (
+    <span
+      className="agent-activity"
+      data-state={activity.state}
+      data-confidence={activity.confidence}
+      title={title}
+      role="status"
+      aria-label={title}
+    >
+      <span className="agent-activity-indicator" aria-hidden="true" />
+      <span>{label}</span>
+    </span>
+  );
+}
+
 export function WorkItemRow({
   item,
   now,
@@ -147,6 +189,9 @@ export function WorkItemRow({
             <span className="item-title">{item.title}</span>
             {isPullRequest ? (
               <div className="item-summary">
+                {item.localAgentActivity ? (
+                  <AgentActivity activity={item.localAgentActivity} />
+                ) : null}
                 <span className="status-badge" data-status={status}>
                   {status}
                 </span>

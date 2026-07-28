@@ -47,9 +47,14 @@ type SyncController interface {
 	Running() bool
 }
 
+type ItemDecorator interface {
+	Decorate([]model.WorkItem)
+}
+
 type Server struct {
 	store                  SnapshotStore
 	controller             SyncController
+	decorator              ItemDecorator
 	host                   string
 	viewer                 string
 	notificationsSupported bool
@@ -69,6 +74,7 @@ func New(
 	host string,
 	viewer string,
 	notificationsSupported bool,
+	decorator ItemDecorator,
 	observeSnapshot func(context.Context, model.Snapshot),
 ) (*Server, error) {
 	session, err := newSession()
@@ -83,6 +89,7 @@ func New(
 	server := &Server{
 		store:                  store,
 		controller:             controller,
+		decorator:              decorator,
 		host:                   host,
 		viewer:                 viewer,
 		notificationsSupported: notificationsSupported,
@@ -329,6 +336,9 @@ func (s *Server) snapshot(ctx context.Context) (model.Snapshot, error) {
 	snapshot.Notifications.Supported = s.notificationsSupported
 	if snapshot.Items == nil {
 		snapshot.Items = make([]model.WorkItem, 0)
+	}
+	if s.decorator != nil {
+		s.decorator.Decorate(snapshot.Items)
 	}
 	return snapshot, nil
 }

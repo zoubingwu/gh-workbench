@@ -29,6 +29,13 @@ export type PollState = {
   error?: string | null;
 };
 
+export type LocalAgentActivity = {
+  state: "working" | "needs_input";
+  providers: string[];
+  sessionCount: number;
+  confidence: "supported" | "heuristic";
+};
+
 export type WorkItem = {
   repository: string;
   number: number;
@@ -48,6 +55,7 @@ export type WorkItem = {
   labels: Label[];
   latestActivity: Activity | null;
   reactions: Reaction[];
+  localAgentActivity?: LocalAgentActivity | null;
   poll: PollState;
 };
 

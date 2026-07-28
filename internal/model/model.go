@@ -66,30 +66,55 @@ type PollStatus struct {
 	Error           string     `json:"error,omitempty"`
 }
 
+type LocalAgentState string
+
+const (
+	LocalAgentStateWorking    LocalAgentState = "working"
+	LocalAgentStateNeedsInput LocalAgentState = "needs_input"
+)
+
+type LocalAgentConfidence string
+
+const (
+	LocalAgentConfidenceSupported LocalAgentConfidence = "supported"
+	LocalAgentConfidenceHeuristic LocalAgentConfidence = "heuristic"
+)
+
+type LocalAgentActivity struct {
+	State        LocalAgentState      `json:"state"`
+	Providers    []string             `json:"providers"`
+	SessionCount int                  `json:"sessionCount"`
+	Confidence   LocalAgentConfidence `json:"confidence"`
+}
+
 type WorkItem struct {
-	NodeID              string     `json:"-"`
-	Repository          string     `json:"repository"`
-	RepositoryKey       string     `json:"-"`
-	Number              int        `json:"number"`
-	Kind                ItemKind   `json:"kind"`
-	Title               string     `json:"title"`
-	URL                 string     `json:"url"`
-	State               string     `json:"state"`
-	Author              string     `json:"author"`
-	CreatedAt           time.Time  `json:"createdAt"`
-	UpdatedAt           time.Time  `json:"updatedAt"`
-	IsDraft             bool       `json:"isDraft"`
-	ReviewDecision      string     `json:"reviewDecision"`
-	MergeState          string     `json:"mergeState"`
-	NeedsReview         bool       `json:"needsReview"`
-	Additions           int        `json:"additions"`
-	Deletions           int        `json:"deletions"`
-	Labels              []Label    `json:"labels"`
-	LatestActivity      *Activity  `json:"latestActivity"`
-	LatestCommit        *Activity  `json:"-"`
-	LatestReviewComment *Activity  `json:"-"`
-	Reactions           []Reaction `json:"reactions"`
-	Poll                PollStatus `json:"poll"`
+	NodeID              string              `json:"-"`
+	Repository          string              `json:"repository"`
+	RepositoryKey       string              `json:"-"`
+	HeadRepositoryKey   string              `json:"-"`
+	HeadRefName         string              `json:"-"`
+	HeadRefOID          string              `json:"-"`
+	Number              int                 `json:"number"`
+	Kind                ItemKind            `json:"kind"`
+	Title               string              `json:"title"`
+	URL                 string              `json:"url"`
+	State               string              `json:"state"`
+	Author              string              `json:"author"`
+	CreatedAt           time.Time           `json:"createdAt"`
+	UpdatedAt           time.Time           `json:"updatedAt"`
+	IsDraft             bool                `json:"isDraft"`
+	ReviewDecision      string              `json:"reviewDecision"`
+	MergeState          string              `json:"mergeState"`
+	NeedsReview         bool                `json:"needsReview"`
+	Additions           int                 `json:"additions"`
+	Deletions           int                 `json:"deletions"`
+	Labels              []Label             `json:"labels"`
+	LatestActivity      *Activity           `json:"latestActivity"`
+	LatestCommit        *Activity           `json:"-"`
+	LatestReviewComment *Activity           `json:"-"`
+	Reactions           []Reaction          `json:"reactions"`
+	LocalAgentActivity  *LocalAgentActivity `json:"localAgentActivity,omitempty"`
+	Poll                PollStatus          `json:"poll"`
 }
 
 type ItemsResult struct {

@@ -43,6 +43,15 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 		if !strings.Contains(payload.Query, "\n        id\n") {
 			t.Fatalf("GraphQL query = %q, want global node IDs", payload.Query)
 		}
+		for _, fragment := range []string{
+			"headRepository",
+			"headRefName",
+			"headRefOid",
+		} {
+			if !strings.Contains(payload.Query, fragment) {
+				t.Fatalf("GraphQL query = %q, want %s", payload.Query, fragment)
+			}
+		}
 		queries = append(queries, payload.Variables.Query)
 
 		switch {
@@ -59,6 +68,9 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 					"createdAt": "2026-07-26T10:00:00Z",
 					"updatedAt": "2026-07-28T10:00:00Z",
 					"repository": {"nameWithOwner": "acme/rocket"},
+					"headRepository": {"nameWithOwner": "octocat/rocket"},
+					"headRefName": "ship-rocket",
+					"headRefOid": "1111111111111111111111111111111111111111",
 					"isDraft": false,
 					"reviewDecision": "REVIEW_REQUIRED",
 					"mergeStateStatus": "BLOCKED",
@@ -79,6 +91,9 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 					"createdAt": "2026-07-20T08:00:00Z",
 					"updatedAt": "2026-07-27T08:00:00Z",
 					"repository": {"nameWithOwner": "octocat/satellite"},
+					"headRepository": {"nameWithOwner": "octocat/satellite"},
+					"headRefName": "keep-online",
+					"headRefOid": "2222222222222222222222222222222222222222",
 					"isDraft": true,
 					"reviewDecision": null,
 					"mergeStateStatus": "DRAFT",
@@ -99,6 +114,9 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 					"createdAt": "2026-07-26T10:00:00Z",
 					"updatedAt": "2026-07-28T10:00:00Z",
 					"repository": {"nameWithOwner": "acme/rocket"},
+					"headRepository": {"nameWithOwner": "octocat/rocket"},
+					"headRefName": "ship-rocket",
+					"headRefOid": "1111111111111111111111111111111111111111",
 					"isDraft": false,
 					"reviewDecision": "REVIEW_REQUIRED",
 					"mergeStateStatus": "BLOCKED",
@@ -170,6 +188,9 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 					"createdAt": "2026-07-20T08:00:00Z",
 					"updatedAt": "2026-07-27T08:00:00Z",
 					"repository": {"nameWithOwner": "octocat/satellite"},
+					"headRepository": {"nameWithOwner": "octocat/satellite"},
+					"headRefName": "keep-online",
+					"headRefOid": "2222222222222222222222222222222222222222",
 					"isDraft": true,
 					"reviewDecision": null,
 					"mergeStateStatus": "DRAFT",
@@ -253,6 +274,11 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 			"pull request review decision = %q, want review_required",
 			pullRequest.ReviewDecision,
 		)
+	}
+	if pullRequest.HeadRepositoryKey != "github.com/octocat/rocket" ||
+		pullRequest.HeadRefName != "ship-rocket" ||
+		pullRequest.HeadRefOID != "1111111111111111111111111111111111111111" {
+		t.Fatalf("pull request head identity = %#v", pullRequest)
 	}
 	if got := byURL["https://github.com/octocat/satellite/pull/11"]; !got.IsDraft {
 		t.Fatal("reviewed pull request IsDraft = false, want true")

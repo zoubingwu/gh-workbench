@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS work_items (
 	repository TEXT NOT NULL,
 	number INTEGER NOT NULL,
 	node_id TEXT NOT NULL DEFAULT '',
+	head_repository TEXT NOT NULL DEFAULT '',
+	head_ref_name TEXT NOT NULL DEFAULT '',
+	head_ref_oid TEXT NOT NULL DEFAULT '',
 	kind TEXT NOT NULL,
 	title TEXT NOT NULL,
 	url TEXT NOT NULL,
@@ -229,11 +232,18 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 		return fmt.Errorf("close work item schema: %w", err)
 	}
 	_, hadReviewCommentCache := columns["latest_review_comment_json"]
+	_, hadHeadRepository := columns["head_repository"]
+	_, hadHeadRefName := columns["head_ref_name"]
+	_, hadHeadRefOID := columns["head_ref_oid"]
+	missingHeadIdentity := !hadHeadRepository || !hadHeadRefName || !hadHeadRefOID
 	migrations := []struct {
 		name string
 		sql  string
 	}{
 		{name: "node_id", sql: "ALTER TABLE work_items ADD COLUMN node_id TEXT NOT NULL DEFAULT ''"},
+		{name: "head_repository", sql: "ALTER TABLE work_items ADD COLUMN head_repository TEXT NOT NULL DEFAULT ''"},
+		{name: "head_ref_name", sql: "ALTER TABLE work_items ADD COLUMN head_ref_name TEXT NOT NULL DEFAULT ''"},
+		{name: "head_ref_oid", sql: "ALTER TABLE work_items ADD COLUMN head_ref_oid TEXT NOT NULL DEFAULT ''"},
 		{name: "is_draft", sql: "ALTER TABLE work_items ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0"},
 		{name: "review_decision", sql: "ALTER TABLE work_items ADD COLUMN review_decision TEXT NOT NULL DEFAULT ''"},
 		{name: "merge_state", sql: "ALTER TABLE work_items ADD COLUMN merge_state TEXT NOT NULL DEFAULT ''"},
@@ -252,6 +262,17 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 		}
 		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
 			return fmt.Errorf("add work item column %q: %w", migration.name, err)
+		}
+	}
+	if missingHeadIdentity {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE poll_resources
+			SET next_poll_at = 0, revision = revision + 1
+			WHERE kind = ?`,
+			model.ResourceKindWorkItems,
+		); err != nil {
+			return fmt.Errorf("refresh migrated work item head identities: %w", err)
 		}
 	}
 	if !hadReviewCommentCache {
@@ -351,6 +372,9 @@ func (s *Store) EnsureAccount(
 
 type itemRecord struct {
 	nodeID            string
+	headRepositoryKey string
+	headRefName       string
+	headRefOID        string
 	kind              model.ItemKind
 	title             string
 	url               string
@@ -453,6 +477,9 @@ func (s *Store) ReplaceRelevantOpenItems(
 		}
 		record := itemRecord{
 			nodeID:            item.NodeID,
+			headRepositoryKey: item.HeadRepositoryKey,
+			headRefName:       item.HeadRefName,
+			headRefOID:        item.HeadRefOID,
 			kind:              item.Kind,
 			title:             item.Title,
 			url:               item.URL,
@@ -491,6 +518,9 @@ func (s *Store) ReplaceRelevantOpenItems(
 				repository,
 				number,
 				node_id,
+				head_repository,
+				head_ref_name,
+				head_ref_oid,
 				kind,
 				title,
 				url,
@@ -509,9 +539,12 @@ func (s *Store) ReplaceRelevantOpenItems(
 				latest_commit_json,
 				latest_review_comment_json,
 				missing_polls
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(repository, number) DO UPDATE SET
 				node_id = excluded.node_id,
+				head_repository = excluded.head_repository,
+				head_ref_name = excluded.head_ref_name,
+				head_ref_oid = excluded.head_ref_oid,
 				kind = excluded.kind,
 				title = excluded.title,
 				url = excluded.url,
@@ -542,6 +575,9 @@ func (s *Store) ReplaceRelevantOpenItems(
 			item.RepositoryKey,
 			item.Number,
 			item.NodeID,
+			item.HeadRepositoryKey,
+			item.HeadRefName,
+			item.HeadRefOID,
 			item.Kind,
 			item.Title,
 			item.URL,
@@ -657,6 +693,9 @@ func loadItemRecords(
 			repository,
 			number,
 			node_id,
+			head_repository,
+			head_ref_name,
+			head_ref_oid,
 			kind,
 			title,
 			url,
@@ -697,6 +736,9 @@ func loadItemRecords(
 			&key.repository,
 			&key.number,
 			&record.nodeID,
+			&record.headRepositoryKey,
+			&record.headRefName,
+			&record.headRefOID,
 			&record.kind,
 			&record.title,
 			&record.url,
@@ -1318,6 +1360,9 @@ func (s *Store) loadItems(
 			repository,
 			number,
 			node_id,
+			head_repository,
+			head_ref_name,
+			head_ref_oid,
 			kind,
 			title,
 			url,
@@ -1360,6 +1405,9 @@ func (s *Store) loadItems(
 			&item.RepositoryKey,
 			&item.Number,
 			&item.NodeID,
+			&item.HeadRepositoryKey,
+			&item.HeadRefName,
+			&item.HeadRefOID,
 			&item.Kind,
 			&item.Title,
 			&item.URL,
