@@ -610,17 +610,29 @@ func TestSelectedItemUsesCompactBrowserRow(t *testing.T) {
 
 	lines := strings.Split(ansi.Strip(current.View().Content), "\n")
 	titleIndex := lineContaining(t, lines, "Compact work item")
-	row := strings.Join(lines[titleIndex:titleIndex+2], "\n")
+	titleLine := lines[titleIndex]
+	if !strings.Contains(
+		titleLine,
+		"⑂ Approved Compact work item  ·  +10 -2",
+	) {
+		t.Fatalf("compact title line has unexpected order: %q", titleLine)
+	}
+	for _, label := range []string{"Status:", "Changes:"} {
+		if strings.Contains(titleLine, label) {
+			t.Fatalf("compact title line contains %q: %q", label, titleLine)
+		}
+	}
+
+	detailLine := lines[titleIndex+1]
+	if !strings.Contains(detailLine, "👀 1 · #7") {
+		t.Fatalf("compact detail line has unexpected order: %q", detailLine)
+	}
 	for _, value := range []string{
-		"Status: Approved",
-		"+10",
-		"-2",
 		"bob commented: looks good",
-		"👀 1",
 		"Poll error: rate limited",
 	} {
-		if !strings.Contains(row, value) {
-			t.Fatalf("compact row missing %q:\n%s", value, row)
+		if !strings.Contains(detailLine, value) {
+			t.Fatalf("compact detail line missing %q: %q", value, detailLine)
 		}
 	}
 }
@@ -680,7 +692,7 @@ func TestViewKeepsStructuredDetailsVisibleForEveryItem(t *testing.T) {
 	row := strings.Join(lines[titleIndex:titleIndex+2], "\n")
 	for _, value := range []string{
 		"Second work item",
-		"Status: Changes requested",
+		"Changes requested",
 		"+22",
 		"-3",
 		"carol approved: ready to merge",
@@ -745,10 +757,19 @@ func TestViewColorsStatusesChangesAndLabels(t *testing.T) {
 		"alice",
 		now,
 	)
+	issue.Title = "Labeled issue"
 	issue.Labels = []model.Label{
 		{Name: "bug", Color: "d73a4a"},
 		{Name: "docs", Color: "fef2c0"},
 	}
+	unlabeledIssue := workItem(
+		"acme/api",
+		6,
+		model.ItemKindIssue,
+		"alice",
+		now,
+	)
+	unlabeledIssue.Title = "Unlabeled issue"
 
 	current := newModel(context.Background(), Options{}, func() time.Time {
 		return now
@@ -767,6 +788,7 @@ func TestViewColorsStatusesChangesAndLabels(t *testing.T) {
 				reviewRequested,
 				draft,
 				issue,
+				unlabeledIssue,
 			},
 		},
 	})
@@ -785,6 +807,17 @@ func TestViewColorsStatusesChangesAndLabels(t *testing.T) {
 		if !strings.Contains(view, value) {
 			t.Fatalf("View() missing color sequence %q:\n%s", value, view)
 		}
+	}
+
+	lines := strings.Split(ansi.Strip(view), "\n")
+	labeledLine := lines[lineContaining(t, lines, "Labeled issue")]
+	if got := strings.Join(strings.Fields(labeledLine), " "); got !=
+		"● Labeled issue · bug docs" {
+		t.Fatalf("labeled issue line = %q", got)
+	}
+	unlabeledLine := lines[lineContaining(t, lines, "Unlabeled issue")]
+	if got := strings.TrimSpace(unlabeledLine); got != "● Unlabeled issue" {
+		t.Fatalf("unlabeled issue line = %q", got)
 	}
 }
 

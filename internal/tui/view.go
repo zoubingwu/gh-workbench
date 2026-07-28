@@ -249,7 +249,12 @@ func (m terminalModel) itemTitleLine(
 		title = style(title, ansiBold)
 	}
 
-	line := fmt.Sprintf("%s %s %s", selectionRail(selected), icon, title)
+	line := selectionRail(selected) + " " + icon + " "
+	if item.Kind == model.ItemKindPullRequest {
+		status := workItemStatus(item)
+		line += style(status, statusColor(status)) + " "
+	}
+	line += title
 	line = joinItemSummary(
 		line,
 		itemSummary(item),
@@ -266,11 +271,15 @@ func (m terminalModel) itemDetailLine(
 	if author == "" {
 		author = "ghost"
 	}
-	parts := []string{
-		fmt.Sprintf("#%d", item.Number),
-		"opened by " + author,
-		"updated " + relativeTime(item.UpdatedAt, m.now()),
+	parts := []string{}
+	if reactions := reactionSummary(item.Reactions); reactions != "" {
+		parts = append(parts, reactions)
 	}
+	parts = append(parts,
+		fmt.Sprintf("#%d", item.Number),
+		"opened by "+author,
+		"updated "+relativeTime(item.UpdatedAt, m.now()),
+	)
 	if latest := item.LatestActivity; latest != nil {
 		actor := terminalText(latest.Actor)
 		if actor == "" {
@@ -281,9 +290,6 @@ func (m terminalModel) itemDetailLine(
 			activity += ": " + terminalText(latest.BodyText)
 		}
 		parts = append(parts, activity)
-	}
-	if reactions := reactionSummary(item.Reactions); reactions != "" {
-		parts = append(parts, reactions)
 	}
 	if item.Poll.Error != "" {
 		parts = append(
@@ -304,24 +310,23 @@ func selectionRail(selected bool) string {
 
 func itemSummary(item model.WorkItem) string {
 	if item.Kind == model.ItemKindPullRequest {
-		status := workItemStatus(item)
-		return "Status: " +
-			style(status, statusColor(status)) +
-			" · Changes: " +
-			style(
-				"+"+strconv.Itoa(item.Additions),
-				ansiGreen,
-			) +
+		return style(
+			"+"+strconv.Itoa(item.Additions),
+			ansiGreen,
+		) +
 			" " +
 			style(
 				"-"+strconv.Itoa(item.Deletions),
 				ansiRed,
 			)
 	}
-	return "Labels: " + labelSummary(item.Labels)
+	return labelSummary(item.Labels)
 }
 
 func joinItemSummary(prefix, summary string, width int) string {
+	if summary == "" {
+		return prefix
+	}
 	separator := "  ·  "
 	suffix := separator + summary
 	prefixWidth := width - ansi.StringWidth(suffix)
@@ -333,7 +338,7 @@ func joinItemSummary(prefix, summary string, width int) string {
 
 func labelSummary(labels []model.Label) string {
 	if len(labels) == 0 {
-		return "none"
+		return ""
 	}
 	values := make([]string, 0, len(labels))
 	for _, label := range labels {
