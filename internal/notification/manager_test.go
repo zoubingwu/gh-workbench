@@ -192,6 +192,48 @@ func TestManagerReportsNewActivityAfterAQuietBaseline(t *testing.T) {
 	}
 }
 
+func TestManagerReportsDistinctActivityAtTheSameTime(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	manager := New(sender)
+	item := testItem()
+	occurredAt := item.UpdatedAt.Add(time.Minute)
+	item.LatestActivity = &model.Activity{
+		Kind:       "comment",
+		Actor:      "alice",
+		OccurredAt: occurredAt,
+		URL:        item.URL + "#issuecomment-1",
+	}
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("initial Observe() error = %v", err)
+	}
+
+	item.LatestActivity = &model.Activity{
+		Kind:       "review_comment",
+		Actor:      "bob",
+		OccurredAt: occurredAt,
+		URL:        item.URL + "#discussion_r2",
+	}
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("same-time activity Observe() error = %v", err)
+	}
+	if len(sender.messages) != 1 ||
+		sender.messages[0].Body != "bob left a review comment" {
+		t.Fatalf(
+			"sent messages = %#v, want same-time review comment",
+			sender.messages,
+		)
+	}
+
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("repeated activity Observe() error = %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("messages after repeat = %#v, want unchanged", sender.messages)
+	}
+}
+
 func TestManagerSuppressesFirstActivityHydrationForNewItem(t *testing.T) {
 	t.Parallel()
 
@@ -212,7 +254,7 @@ func TestManagerSuppressesFirstActivityHydrationForNewItem(t *testing.T) {
 	item.LatestActivity = &model.Activity{
 		Kind:       "comment",
 		Actor:      "alice",
-		OccurredAt: item.UpdatedAt.Add(-time.Minute),
+		OccurredAt: item.UpdatedAt,
 		URL:        item.URL + "#issuecomment-existing",
 	}
 	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {

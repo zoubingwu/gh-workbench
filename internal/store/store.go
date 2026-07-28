@@ -154,19 +154,34 @@ func (s *Store) NotificationPreferences(
 	return preferences, nil
 }
 
-func (s *Store) SaveNotificationPreferences(
+func (s *Store) UpdateNotificationPreferences(
 	ctx context.Context,
-	preferences model.NotificationPreferences,
+	update model.NotificationPreferencesUpdate,
 ) error {
+	var (
+		statement string
+		value     bool
+	)
+	switch {
+	case update.Enabled != nil && update.OnlyMyPullRequests == nil:
+		statement = `UPDATE notification_preferences
+			SET enabled = ?
+			WHERE id = 1`
+		value = *update.Enabled
+	case update.Enabled == nil && update.OnlyMyPullRequests != nil:
+		statement = `UPDATE notification_preferences
+			SET only_my_pull_requests = ?
+			WHERE id = 1`
+		value = *update.OnlyMyPullRequests
+	default:
+		return errors.New("update exactly one notification preference")
+	}
 	if _, err := s.db.ExecContext(
 		ctx,
-		`UPDATE notification_preferences
-		SET enabled = ?, only_my_pull_requests = ?
-		WHERE id = 1`,
-		preferences.Enabled,
-		preferences.OnlyMyPullRequests,
+		statement,
+		value,
 	); err != nil {
-		return fmt.Errorf("save notification preferences: %w", err)
+		return fmt.Errorf("update notification preferences: %w", err)
 	}
 	return nil
 }

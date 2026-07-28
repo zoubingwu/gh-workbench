@@ -20,7 +20,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/zoubingwu/gh-workbench/internal/model"
-	"github.com/zoubingwu/gh-workbench/internal/notification"
 	"github.com/zoubingwu/gh-workbench/internal/webui"
 )
 
@@ -37,9 +36,9 @@ type SnapshotStore interface {
 		bool,
 		time.Time,
 	) (model.Snapshot, error)
-	SaveNotificationPreferences(
+	UpdateNotificationPreferences(
 		context.Context,
-		model.NotificationPreferences,
+		model.NotificationPreferencesUpdate,
 	) error
 }
 
@@ -49,15 +48,16 @@ type SyncController interface {
 }
 
 type Server struct {
-	store      SnapshotStore
-	controller SyncController
-	host       string
-	viewer     string
-	session    string
-	cookieName string
-	ui         fs.FS
-	hub        *hub
-	handler    http.Handler
+	store                  SnapshotStore
+	controller             SyncController
+	host                   string
+	viewer                 string
+	notificationsSupported bool
+	session                string
+	cookieName             string
+	ui                     fs.FS
+	hub                    *hub
+	handler                http.Handler
 
 	publicationMu sync.Mutex
 }
@@ -67,6 +67,7 @@ func New(
 	controller SyncController,
 	host string,
 	viewer string,
+	notificationsSupported bool,
 ) (*Server, error) {
 	session, err := newSession()
 	if err != nil {
@@ -78,14 +79,15 @@ func New(
 	}
 
 	server := &Server{
-		store:      store,
-		controller: controller,
-		host:       host,
-		viewer:     viewer,
-		session:    session,
-		cookieName: sessionCookiePrefix + session[:16],
-		ui:         ui,
-		hub:        newHub(),
+		store:                  store,
+		controller:             controller,
+		host:                   host,
+		viewer:                 viewer,
+		notificationsSupported: notificationsSupported,
+		session:                session,
+		cookieName:             sessionCookiePrefix + session[:16],
+		ui:                     ui,
+		hub:                    newHub(),
 	}
 	server.handler = server.routes()
 	return server, nil
@@ -126,7 +128,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /session/{token}", s.handleSession)
 	mux.HandleFunc("GET /api/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("POST /api/sync", s.handleSync)
-	mux.HandleFunc("PUT /api/notifications", s.handleNotifications)
+	mux.HandleFunc("PATCH /api/notifications", s.handleNotifications)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("/", s.handleStatic)
 
@@ -190,16 +192,20 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var preferences model.NotificationPreferences
-	if err := decodeJSON(w, r, &preferences); err != nil {
+	var update model.NotificationPreferencesUpdate
+	if err := decodeJSON(w, r, &update); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid notification settings")
+		return
+	}
+	if (update.Enabled == nil) == (update.OnlyMyPullRequests == nil) {
+		writeError(w, http.StatusBadRequest, "update one notification setting")
 		return
 	}
 
 	s.publicationMu.Lock()
-	if err := s.store.SaveNotificationPreferences(
+	if err := s.store.UpdateNotificationPreferences(
 		r.Context(),
-		preferences,
+		update,
 	); err != nil {
 		s.publicationMu.Unlock()
 		writeError(w, http.StatusInternalServerError, "save notification settings")
@@ -308,7 +314,7 @@ func (s *Server) snapshot(ctx context.Context) (model.Snapshot, error) {
 	}
 	snapshot.Host = s.host
 	snapshot.Viewer = s.viewer
-	snapshot.Notifications.Supported = notification.Supported
+	snapshot.Notifications.Supported = s.notificationsSupported
 	if snapshot.Items == nil {
 		snapshot.Items = make([]model.WorkItem, 0)
 	}

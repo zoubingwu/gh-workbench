@@ -130,6 +130,11 @@ type NotificationPreferences struct {
 	OnlyMyPullRequests bool `json:"onlyMyPullRequests"`
 }
 
+type NotificationPreferencesUpdate struct {
+	Enabled            *bool `json:"enabled,omitempty"`
+	OnlyMyPullRequests *bool `json:"onlyMyPullRequests,omitempty"`
+}
+
 type Snapshot struct {
 	Host            string                  `json:"host"`
 	Viewer          string                  `json:"viewer"`

@@ -163,7 +163,13 @@ func Run(ctx context.Context, options Options) error {
 	}
 	defer listener.Close()
 
-	localServer, err := server.New(database, runner, host, viewer)
+	localServer, err := server.New(
+		database,
+		runner,
+		host,
+		viewer,
+		notification.Supported,
+	)
 	if err != nil {
 		return err
 	}

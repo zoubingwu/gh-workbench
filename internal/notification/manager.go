@@ -39,14 +39,27 @@ type Sender interface {
 
 type Manager struct {
 	sender        Sender
-	cursors       map[string]time.Time
+	cursors       map[string]activityCursor
 	isInitialized bool
+}
+
+type activityCursor struct {
+	occurredAt  time.Time
+	identity    activityIdentity
+	hasActivity bool
+}
+
+type activityIdentity struct {
+	kind     string
+	actor    string
+	bodyText string
+	url      string
 }
 
 func New(sender Sender) *Manager {
 	return &Manager{
 		sender:  sender,
-		cursors: make(map[string]time.Time),
+		cursors: make(map[string]activityCursor),
 	}
 }
 
@@ -61,6 +74,7 @@ func (m *Manager) Observe(ctx context.Context, snapshot model.Snapshot) error {
 			message, ok := messageForChange(
 				snapshot,
 				item,
+				current,
 				previous,
 				exists,
 			)
@@ -69,7 +83,7 @@ func (m *Manager) Observe(ctx context.Context, snapshot model.Snapshot) error {
 			}
 		}
 
-		if !exists || current.After(previous) {
+		if !exists || current.advances(previous) {
 			m.cursors[key] = current
 		}
 	}
@@ -95,7 +109,8 @@ func (m *Manager) Observe(ctx context.Context, snapshot model.Snapshot) error {
 func messageForChange(
 	snapshot model.Snapshot,
 	item model.WorkItem,
-	previous time.Time,
+	current activityCursor,
+	previous activityCursor,
 	exists bool,
 ) (Message, bool) {
 	isViewerItem := sameLogin(item.Author, snapshot.Viewer)
@@ -132,7 +147,7 @@ func messageForChange(
 
 	activity := item.LatestActivity
 	if activity == nil ||
-		!activity.OccurredAt.After(previous) ||
+		!current.isNewActivity(previous) ||
 		sameLogin(activity.Actor, snapshot.Viewer) {
 		return Message{}, false
 	}
@@ -152,16 +167,40 @@ func itemKey(item model.WorkItem) string {
 
 func nextActivityCursor(
 	item model.WorkItem,
-	previous time.Time,
+	previous activityCursor,
 	exists bool,
-) time.Time {
+) activityCursor {
 	if item.LatestActivity != nil && !item.LatestActivity.OccurredAt.IsZero() {
-		return item.LatestActivity.OccurredAt
+		return activityCursor{
+			occurredAt: item.LatestActivity.OccurredAt,
+			identity: activityIdentity{
+				kind:     item.LatestActivity.Kind,
+				actor:    item.LatestActivity.Actor,
+				bodyText: item.LatestActivity.BodyText,
+				url:      item.LatestActivity.URL,
+			},
+			hasActivity: true,
+		}
 	}
 	if !exists {
-		return item.UpdatedAt
+		return activityCursor{occurredAt: item.UpdatedAt}
 	}
 	return previous
+}
+
+func (c activityCursor) advances(previous activityCursor) bool {
+	return c.occurredAt.After(previous.occurredAt) ||
+		(c.occurredAt.Equal(previous.occurredAt) &&
+			c.hasActivity &&
+			c != previous)
+}
+
+func (c activityCursor) isNewActivity(previous activityCursor) bool {
+	return c.occurredAt.After(previous.occurredAt) ||
+		(c.occurredAt.Equal(previous.occurredAt) &&
+			c.hasActivity &&
+			previous.hasActivity &&
+			c.identity != previous.identity)
 }
 
 func sameLogin(login string, viewer string) bool {

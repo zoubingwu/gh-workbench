@@ -349,25 +349,31 @@ function App() {
   };
 
   const saveNotificationPreferences = async (
-    preferences: Pick<NotificationPreferences, "enabled" | "onlyMyPullRequests">,
+    update: Partial<Pick<NotificationPreferences, "enabled" | "onlyMyPullRequests">>,
   ) => {
     setSavingNotifications(true);
     setTransportError(null);
     try {
       const response = await fetch("/api/notifications", {
-        method: "PUT",
+        method: "PATCH",
         credentials: "same-origin",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(preferences),
+        body: JSON.stringify(update),
       });
       if (!response.ok) {
         throw new Error(`Notification settings failed with HTTP ${response.status}`);
       }
-      const saved = (await response.json()) as NotificationPreferences;
-      setSnapshot((current) => (current ? { ...current, notifications: saved } : current));
+      setSnapshot((current) =>
+        current
+          ? {
+              ...current,
+              notifications: { ...current.notifications, ...update },
+            }
+          : current,
+      );
     } catch (error) {
       setTransportError(errorMessage(error));
     } finally {
@@ -377,14 +383,12 @@ function App() {
 
   const updateOnlyMyPullRequests = (nextValue: boolean) =>
     saveNotificationPreferences({
-      enabled: notificationsEnabled,
       onlyMyPullRequests: nextValue,
     });
 
   const toggleNotifications = () =>
     saveNotificationPreferences({
       enabled: !notificationsEnabled,
-      onlyMyPullRequests,
     });
 
   const syncNow = async () => {

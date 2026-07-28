@@ -11,21 +11,33 @@ import (
 	"time"
 
 	"github.com/zoubingwu/gh-workbench/internal/model"
-	"github.com/zoubingwu/gh-workbench/internal/notification"
 )
+
+const testNotificationsSupported = true
 
 func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	t.Parallel()
 
+	defaultPreferences := model.NotificationPreferences{
+		OnlyMyPullRequests: true,
+	}
 	database := &fakeSnapshotStore{
+		preferences: defaultPreferences,
 		snapshot: model.Snapshot{
 			RepositoryCount: 2,
 			GeneratedAt:     time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC),
+			Notifications:   defaultPreferences,
 			Items:           make([]model.WorkItem, 0),
 		},
 	}
 	controller := &fakeController{}
-	server, err := New(database, controller, "github.com", "octocat")
+	server, err := New(
+		database,
+		controller,
+		"github.com",
+		"octocat",
+		testNotificationsSupported,
+	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -79,11 +91,11 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 			snapshot.RepositoryCount,
 		)
 	}
-	if snapshot.Notifications.Supported != notification.Supported {
+	if snapshot.Notifications.Supported != testNotificationsSupported {
 		t.Fatalf(
 			"notification support = %t, want %t",
 			snapshot.Notifications.Supported,
-			notification.Supported,
+			testNotificationsSupported,
 		)
 	}
 
@@ -110,9 +122,9 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(
-		http.MethodPut,
+		http.MethodPatch,
 		"/api/notifications",
-		strings.NewReader(`{"enabled":true,"onlyMyPullRequests":false}`),
+		strings.NewReader(`{"enabled":true}`),
 	)
 	request.Host = "127.0.0.1:43123"
 	request.AddCookie(cookies[0])
@@ -123,7 +135,7 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(
-		http.MethodPut,
+		http.MethodPatch,
 		"/api/notifications",
 		strings.NewReader(`{"enabled":true,"unexpected":false}`),
 	)
@@ -137,13 +149,28 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 		t.Fatalf("invalid notification settings status = %d, want 400", response.Code)
 	}
 
+	request = httptest.NewRequest(
+		http.MethodPatch,
+		"/api/notifications",
+		strings.NewReader(`{"enabled":true,"onlyMyPullRequests":false}`),
+	)
+	request.Host = "127.0.0.1:43123"
+	request.Header.Set("Origin", "http://127.0.0.1:43123")
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("multi-field notification settings status = %d, want 400", response.Code)
+	}
+
 	updates, unsubscribe := server.hub.subscribe()
 	defer unsubscribe()
 
 	request = httptest.NewRequest(
-		http.MethodPut,
+		http.MethodPatch,
 		"/api/notifications",
-		strings.NewReader(`{"enabled":true,"onlyMyPullRequests":false}`),
+		strings.NewReader(`{"enabled":true}`),
 	)
 	request.Host = "127.0.0.1:43123"
 	request.Header.Set("Origin", "http://127.0.0.1:43123")
@@ -158,9 +185,12 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&savedPreferences); err != nil {
 		t.Fatalf("decode saved notification preferences: %v", err)
 	}
-	expectedPreferences := model.NotificationPreferences{Enabled: true}
+	expectedPreferences := model.NotificationPreferences{
+		Enabled:            true,
+		OnlyMyPullRequests: true,
+	}
 	expectedResponse := expectedPreferences
-	expectedResponse.Supported = notification.Supported
+	expectedResponse.Supported = testNotificationsSupported
 	if savedPreferences != expectedResponse {
 		t.Fatalf(
 			"saved notification response = %#v, want %#v",
@@ -211,6 +241,7 @@ func TestServerRejectsNonLoopbackHost(t *testing.T) {
 		&fakeController{},
 		"github.com",
 		"octocat",
+		testNotificationsSupported,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -229,7 +260,13 @@ func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
 	t.Parallel()
 
 	database := &serializationCheckingStore{}
-	server, err := New(database, &fakeController{}, "github.com", "octocat")
+	server, err := New(
+		database,
+		&fakeController{},
+		"github.com",
+		"octocat",
+		testNotificationsSupported,
+	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -240,9 +277,9 @@ func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(
-		http.MethodPut,
+		http.MethodPatch,
 		"/api/notifications",
-		strings.NewReader(`{"enabled":true,"onlyMyPullRequests":false}`),
+		strings.NewReader(`{"enabled":true}`),
 	)
 	request.Host = "127.0.0.1:43123"
 	request.Header.Set("Origin", "http://127.0.0.1:43123")
@@ -279,6 +316,7 @@ func TestServerServesEmbeddedIndexWithoutRedirect(t *testing.T) {
 		&fakeController{},
 		"github.com",
 		"octocat",
+		testNotificationsSupported,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -304,6 +342,7 @@ func TestServerInstancesUseDistinctSessionCookies(t *testing.T) {
 		&fakeController{},
 		"github.com",
 		"octocat",
+		testNotificationsSupported,
 	)
 	if err != nil {
 		t.Fatalf("first New() error = %v", err)
@@ -313,6 +352,7 @@ func TestServerInstancesUseDistinctSessionCookies(t *testing.T) {
 		&fakeController{},
 		"github.com",
 		"hubot",
+		testNotificationsSupported,
 	)
 	if err != nil {
 		t.Fatalf("second New() error = %v", err)
@@ -351,12 +391,12 @@ func (f *fakeSnapshotStore) Snapshot(
 	return f.snapshot, nil
 }
 
-func (f *fakeSnapshotStore) SaveNotificationPreferences(
+func (f *fakeSnapshotStore) UpdateNotificationPreferences(
 	_ context.Context,
-	preferences model.NotificationPreferences,
+	update model.NotificationPreferencesUpdate,
 ) error {
-	f.preferences = preferences
-	f.snapshot.Notifications = preferences
+	applyNotificationPreferencesUpdate(&f.preferences, update)
+	applyNotificationPreferencesUpdate(&f.snapshot.Notifications, update)
 	f.saveCalls++
 	return nil
 }
@@ -380,14 +420,26 @@ func (f *serializationCheckingStore) Snapshot(
 	return f.snapshot, nil
 }
 
-func (f *serializationCheckingStore) SaveNotificationPreferences(
+func (f *serializationCheckingStore) UpdateNotificationPreferences(
 	_ context.Context,
-	preferences model.NotificationPreferences,
+	update model.NotificationPreferencesUpdate,
 ) error {
 	f.recordSerialization()
-	f.snapshot.Notifications = preferences
+	applyNotificationPreferencesUpdate(&f.snapshot.Notifications, update)
 	f.saveCalls++
 	return nil
+}
+
+func applyNotificationPreferencesUpdate(
+	preferences *model.NotificationPreferences,
+	update model.NotificationPreferencesUpdate,
+) {
+	if update.Enabled != nil {
+		preferences.Enabled = *update.Enabled
+	}
+	if update.OnlyMyPullRequests != nil {
+		preferences.OnlyMyPullRequests = *update.OnlyMyPullRequests
+	}
 }
 
 func (f *serializationCheckingStore) recordSerialization() {

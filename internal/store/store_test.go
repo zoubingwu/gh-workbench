@@ -33,9 +33,37 @@ func TestStorePersistsNotificationPreferences(t *testing.T) {
 		t.Fatalf("default preferences = %#v, want %#v", preferences, expectedDefaults)
 	}
 
-	expected := model.NotificationPreferences{Enabled: true}
-	if err := database.SaveNotificationPreferences(ctx, expected); err != nil {
-		t.Fatalf("SaveNotificationPreferences() error = %v", err)
+	enabled := true
+	if err := database.UpdateNotificationPreferences(
+		ctx,
+		model.NotificationPreferencesUpdate{Enabled: &enabled},
+	); err != nil {
+		t.Fatalf("UpdateNotificationPreferences(enabled) error = %v", err)
+	}
+	preferences, err = database.NotificationPreferences(ctx)
+	if err != nil {
+		t.Fatalf("NotificationPreferences() after enabled update error = %v", err)
+	}
+	expectedEnabled := model.NotificationPreferences{
+		Enabled:            true,
+		OnlyMyPullRequests: true,
+	}
+	if preferences != expectedEnabled {
+		t.Fatalf(
+			"preferences after enabled update = %#v, want %#v",
+			preferences,
+			expectedEnabled,
+		)
+	}
+
+	onlyMyPullRequests := false
+	if err := database.UpdateNotificationPreferences(
+		ctx,
+		model.NotificationPreferencesUpdate{
+			OnlyMyPullRequests: &onlyMyPullRequests,
+		},
+	); err != nil {
+		t.Fatalf("UpdateNotificationPreferences(only my PRs) error = %v", err)
 	}
 	if err := database.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -55,6 +83,7 @@ func TestStorePersistsNotificationPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopened NotificationPreferences() error = %v", err)
 	}
+	expected := model.NotificationPreferences{Enabled: true}
 	if preferences != expected {
 		t.Fatalf("reopened preferences = %#v, want %#v", preferences, expected)
 	}
