@@ -22,15 +22,18 @@ Sources:
 - [GraphQL `PullRequestReview`](https://docs.github.com/en/graphql/reference/pulls#pullrequestreview)
 - [REST review-comment representations](https://docs.github.com/en/rest/pulls/comments?apiVersion=2022-11-28#list-review-comments-on-a-pull-request)
 
-## Current artifact
+## Root cause and current contract
 
 GitHub Workbench already queries GraphQL `bodyText` for Issue comments and
 submitted reviews. Those paths receive rendered text.
 
-The inline review-comment request currently sends the generic
-`application/vnd.github+json` media type. Its decoder prefers `body_text`, then
-falls back to `body`. The default REST representation supplies raw Markdown in
-`body`, so markup such as `**`, `<sub>`, and `![badge](url)` can reach the UI.
+The earlier inline review-comment request sent the generic
+`application/vnd.github+json` media type and fell back from `body_text` to
+`body`. The default REST representation supplied raw Markdown in `body`, so
+markup such as `**`, `<sub>`, and `![badge](url)` reached the UI.
+
+The current client requests the text media type and consumes `body_text`
+exclusively.
 
 ## Minimal implementation
 
