@@ -356,7 +356,6 @@ func (r *Runner) pollActivities(
 			Repository:          repository,
 			Number:              resource.Number,
 			Kind:                resource.ItemKind,
-			LatestActivity:      resource.LatestActivity,
 			LatestReviewComment: resource.LatestReviewComment,
 			ETag:                resource.ETag,
 		})

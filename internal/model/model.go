@@ -108,7 +108,6 @@ type ActivityTarget struct {
 	Repository          Repository
 	Number              int
 	Kind                ItemKind
-	LatestActivity      *Activity
 	LatestReviewComment *Activity
 	ETag                string
 }
@@ -151,7 +150,6 @@ type PollResource struct {
 	LastError           string
 	NodeID              string
 	ItemKind            ItemKind
-	LatestActivity      *Activity
 	LatestReviewComment *Activity
 }
 

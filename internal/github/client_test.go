@@ -1091,20 +1091,12 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 
 	tests := []struct {
 		name            string
-		current         *model.Activity
 		reviewComment   *model.Activity
 		expected        *model.Activity
 		wantRequestETag string
 	}{
 		{
 			name: "cached inline comment",
-			current: &model.Activity{
-				Kind:       "review_comment",
-				Actor:      "reviewer",
-				BodyText:   "cached inline comment",
-				OccurredAt: time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC),
-				URL:        "https://github.com/acme/rocket/pull/7#discussion_r42",
-			},
 			expected: &model.Activity{
 				Kind:       "review_comment",
 				Actor:      "reviewer",
@@ -1123,13 +1115,6 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 		},
 		{
 			name: "reuses inline candidate when another activity previously won",
-			current: &model.Activity{
-				Kind:       "comment",
-				Actor:      "someone",
-				BodyText:   "stale cached activity",
-				OccurredAt: time.Date(2026, 7, 28, 10, 40, 0, 0, time.UTC),
-				URL:        "https://github.com/acme/rocket/pull/7#issuecomment-1",
-			},
 			expected: &model.Activity{
 				Kind:       "review_comment",
 				Actor:      "reviewer",
@@ -1199,7 +1184,6 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 				Repository:          model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
 				Number:              7,
 				Kind:                model.ItemKindPullRequest,
-				LatestActivity:      test.current,
 				LatestReviewComment: test.reviewComment,
 				ETag:                `"inline-v1"`,
 			}})

@@ -1083,3 +1083,66 @@ func TestOpenMigratesWorkItemColumns(t *testing.T) {
 		t.Fatalf("migrated activity ETag = %q, want empty cache reset", etag)
 	}
 }
+
+func TestOpenClearsActivityETagWithoutReviewCommentCache(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "interrupted-migration.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := database.EnsureAccount(ctx, "github.com", now); err != nil {
+		t.Fatalf("EnsureAccount() error = %v", err)
+	}
+	item := model.WorkItem{
+		NodeID:        "PR_interrupted",
+		RepositoryKey: "github.com/acme/api",
+		Number:        12,
+		Kind:          model.ItemKindPullRequest,
+		Title:         "Interrupted migration",
+		URL:           "https://github.com/acme/api/pull/12",
+		State:         "open",
+		Author:        "octocat",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if _, err := database.ReplaceRelevantOpenItems(
+		ctx,
+		"github.com",
+		[]model.WorkItem{item},
+		now,
+	); err != nil {
+		t.Fatalf("ReplaceRelevantOpenItems() error = %v", err)
+	}
+	if _, err := database.db.Exec(
+		`UPDATE poll_resources SET etag = ?
+		WHERE resource_key = ?`,
+		`"legacy-inline"`,
+		model.ActivityResourceKey(item.RepositoryKey, item.Number),
+	); err != nil {
+		t.Fatalf("seed legacy activity ETag: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() after interrupted migration error = %v", err)
+	}
+	defer reopened.Close()
+
+	var etag string
+	if err := reopened.db.QueryRow(
+		"SELECT etag FROM poll_resources WHERE resource_key = ?",
+		model.ActivityResourceKey(item.RepositoryKey, item.Number),
+	).Scan(&etag); err != nil {
+		t.Fatalf("load healed activity ETag: %v", err)
+	}
+	if etag != "" {
+		t.Fatalf("healed activity ETag = %q, want empty cache reset", etag)
+	}
+}

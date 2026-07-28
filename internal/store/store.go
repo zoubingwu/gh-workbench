@@ -122,7 +122,13 @@ CREATE INDEX IF NOT EXISTS poll_resources_due
 }
 
 func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info(work_items)")
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin work item schema migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(work_items)")
 	if err != nil {
 		return fmt.Errorf("inspect work item schema: %w", err)
 	}
@@ -157,7 +163,6 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 		return fmt.Errorf("close work item schema: %w", err)
 	}
 	_, hadReviewCommentCache := columns["latest_review_comment_json"]
-
 	migrations := []struct {
 		name string
 		sql  string
@@ -178,18 +183,39 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 		if _, ok := columns[migration.name]; ok {
 			continue
 		}
-		if _, err := s.db.ExecContext(ctx, migration.sql); err != nil {
+		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
 			return fmt.Errorf("add work item column %q: %w", migration.name, err)
 		}
 	}
 	if !hadReviewCommentCache {
-		if _, err := s.db.ExecContext(
+		if _, err := tx.ExecContext(
 			ctx,
 			"UPDATE poll_resources SET etag = '' WHERE kind = ?",
 			model.ResourceKindActivity,
 		); err != nil {
-			return fmt.Errorf("reset activity ETags for review comment cache: %w", err)
+			return fmt.Errorf("reset migrated activity ETags: %w", err)
 		}
+	} else if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE poll_resources
+			SET etag = ''
+			WHERE kind = ?
+				AND etag <> ''
+				AND EXISTS (
+					SELECT 1
+					FROM work_items
+					WHERE work_items.repository = poll_resources.repository
+						AND work_items.number = poll_resources.number
+						AND work_items.kind = ?
+						AND work_items.latest_review_comment_json IS NULL
+				)`,
+		model.ResourceKindActivity,
+		model.ItemKindPullRequest,
+	); err != nil {
+		return fmt.Errorf("heal activity ETags without review comment cache: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit work item schema migration: %w", err)
 	}
 	return nil
 }
@@ -998,7 +1024,6 @@ func (s *Store) ListDueResources(
 			poll_resources.revision,
 			work_items.node_id,
 			work_items.kind,
-			work_items.latest_activity_json,
 			work_items.latest_review_comment_json
 		FROM poll_resources
 		LEFT JOIN work_items
@@ -1364,7 +1389,6 @@ func (s *Store) loadResources(
 			poll_resources.revision,
 			work_items.node_id,
 			work_items.kind,
-			work_items.latest_activity_json,
 			work_items.latest_review_comment_json
 		FROM poll_resources
 		LEFT JOIN work_items
@@ -1409,7 +1433,6 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 		resourceUpdatedAt int64
 		nodeID            sql.NullString
 		itemKind          sql.NullString
-		activityJSON      sql.NullString
 		reviewCommentJSON sql.NullString
 	)
 	if err := row.Scan(
@@ -1429,7 +1452,6 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 		&resource.Revision,
 		&nodeID,
 		&itemKind,
-		&activityJSON,
 		&reviewCommentJSON,
 	); err != nil {
 		return model.PollResource{}, fmt.Errorf("scan poll resource: %w", err)
@@ -1442,15 +1464,6 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 	resource.ResourceUpdatedAt = time.Unix(0, resourceUpdatedAt).UTC()
 	resource.NodeID = nodeID.String
 	resource.ItemKind = model.ItemKind(itemKind.String)
-	activity, err := decodeActivity(activityJSON)
-	if err != nil {
-		return model.PollResource{}, fmt.Errorf(
-			"decode poll resource %q activity: %w",
-			resource.Key,
-			err,
-		)
-	}
-	resource.LatestActivity = activity
 	reviewComment, err := decodeActivity(reviewCommentJSON)
 	if err != nil {
 		return model.PollResource{}, fmt.Errorf(
