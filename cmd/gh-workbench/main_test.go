@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -47,7 +49,7 @@ func TestRunPrintsHelpWithoutStartingApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
-	for _, flagName := range []string{"-browser", "-no-open"} {
+	for _, flagName := range []string{"-browser", "-demo", "-no-open"} {
 		if !strings.Contains(stderr.String(), flagName) {
 			t.Fatalf("help output = %q, want %s flag", stderr.String(), flagName)
 		}
@@ -61,6 +63,7 @@ func TestParseArgumentsSelectsInterface(t *testing.T) {
 		name      string
 		arguments []string
 		browser   bool
+		demo      bool
 		noOpen    bool
 	}{
 		{
@@ -76,6 +79,11 @@ func TestParseArgumentsSelectsInterface(t *testing.T) {
 			arguments: []string{"--browser", "--no-open"},
 			browser:   true,
 			noOpen:    true,
+		},
+		{
+			name:      "terminal demo",
+			arguments: []string{"--demo"},
+			demo:      true,
 		},
 	}
 
@@ -98,6 +106,13 @@ func TestParseArgumentsSelectsInterface(t *testing.T) {
 					"Browser = %t, want %t",
 					options.Browser,
 					test.browser,
+				)
+			}
+			if options.Demo != test.demo {
+				t.Fatalf(
+					"Demo = %t, want %t",
+					options.Demo,
+					test.demo,
 				)
 			}
 			if options.NoOpen != test.noOpen {
@@ -163,5 +178,45 @@ func TestRunUsesTerminalInterfaceByDefault(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "terminal UI requires") {
 		t.Fatalf("run() error = %q", err)
+	}
+}
+
+func TestRunStartsDemoWithoutGitHubCredentials(t *testing.T) {
+	t.Setenv("PATH", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dataDir := filepath.Join(t.TempDir(), "workbench-cache")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := run(
+		ctx,
+		[]string{
+			"--demo",
+			"--browser",
+			"--no-open",
+			"--data-dir",
+			dataDir,
+		},
+		&stdout,
+		&stderr,
+	)
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(
+		got,
+		"GitHub Workbench is running for demo-user@github.example",
+	) {
+		t.Fatalf("stdout = %q, want demo account", got)
+	}
+	if got := stdout.String(); !strings.Contains(got, "/session/") {
+		t.Fatalf("stdout = %q, want authenticated session URL", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("demo data directory stat error = %v, want not found", err)
 	}
 }

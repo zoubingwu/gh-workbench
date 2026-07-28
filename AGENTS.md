@@ -7,7 +7,8 @@ application.
 One process represents the active `gh` account and aggregates relevant open
 issues and pull requests through account-wide GitHub search. Relevance means
 authored, assigned, mentioned, reviewed, or review-requested. Account caches are
-isolated by GitHub host and viewer login.
+isolated by GitHub host and viewer login. Demo mode supplies either UI with an
+in-memory synthetic snapshot.
 
 ## Runtime and data flow
 
@@ -45,7 +46,7 @@ remain within the scheduler until the queue becomes idle.
 
 - `cmd/gh-workbench` parses flags and handles process signals.
 - `internal/app` resolves the active account, wires concrete dependencies, and
-  owns startup and shutdown.
+  owns authenticated and demo composition, startup, and shutdown.
 - `internal/agentstatus` discovers local Codex and Claude Code activity
   read-only, resolves Git identity, and decorates snapshots without persistence.
 - `internal/github` is the only package that calls GitHub. GraphQL owns
