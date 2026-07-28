@@ -7,7 +7,9 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -23,6 +25,7 @@ import (
 const (
 	sessionCookiePrefix = "gh_workbench_"
 	writeTimeout        = 5 * time.Second
+	maxJSONBodyBytes    = 1024
 )
 
 type SnapshotStore interface {
@@ -32,6 +35,10 @@ type SnapshotStore interface {
 		bool,
 		time.Time,
 	) (model.Snapshot, error)
+	SaveNotificationPreferences(
+		context.Context,
+		model.NotificationPreferences,
+	) error
 }
 
 type SyncController interface {
@@ -88,15 +95,17 @@ func (s *Server) SessionPath() string {
 	return "/session/" + s.session
 }
 
-func (s *Server) PublishSnapshot() {
-	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	defer cancel()
-
+func (s *Server) PublishSnapshot(
+	ctx context.Context,
+) (model.Snapshot, error) {
 	snapshot, err := s.snapshot(ctx)
 	if err != nil {
-		return
+		return model.Snapshot{}, err
 	}
-	_ = s.hub.publish(snapshot)
+	if err := s.hub.publish(snapshot); err != nil {
+		return model.Snapshot{}, fmt.Errorf("publish snapshot: %w", err)
+	}
+	return snapshot, nil
 }
 
 func (s *Server) routes() http.Handler {
@@ -104,6 +113,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /session/{token}", s.handleSession)
 	mux.HandleFunc("GET /api/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("POST /api/sync", s.handleSync)
+	mux.HandleFunc("PUT /api/notifications", s.handleNotifications)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("/", s.handleStatic)
 
@@ -157,6 +167,31 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}{Accepted: true})
 }
 
+func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticated(r) {
+		writeError(w, http.StatusUnauthorized, "session required")
+		return
+	}
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "same-origin request required")
+		return
+	}
+
+	var preferences model.NotificationPreferences
+	if err := decodeJSON(w, r, &preferences); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid notification settings")
+		return
+	}
+	if err := s.store.SaveNotificationPreferences(
+		r.Context(),
+		preferences,
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, "save notification settings")
+		return
+	}
+	writeJSON(w, http.StatusOK, preferences)
+}
+
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if !s.authenticated(r) {
 		writeError(w, http.StatusUnauthorized, "session required")
@@ -177,7 +212,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	clientContext := connection.CloseRead(context.Background())
 	updates, unsubscribe := s.hub.subscribe()
 	defer unsubscribe()
-	s.PublishSnapshot()
+	publishContext, publishCancel := context.WithTimeout(
+		clientContext,
+		writeTimeout,
+	)
+	_, err = s.PublishSnapshot(publishContext)
+	publishCancel()
+	if err != nil {
+		return
+	}
 
 	for {
 		select {
@@ -320,4 +363,22 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, struct {
 		Error string `json:"error"`
 	}{Error: message})
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
+	decoder := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, maxJSONBodyBytes),
+	)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("decode json: %w", err)
+	}
+	err := decoder.Decode(&struct{}{})
+	if err == nil {
+		return errors.New("decode trailing json: multiple values")
+	}
+	if !errors.Is(err, io.EOF) {
+		return fmt.Errorf("decode trailing json: %w", err)
+	}
+	return nil
 }

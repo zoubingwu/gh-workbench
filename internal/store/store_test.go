@@ -12,6 +12,62 @@ import (
 	"github.com/zoubingwu/gh-workbench/internal/model"
 )
 
+func TestStorePersistsNotificationPreferences(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "preferences.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	preferences, err := database.NotificationPreferences(ctx)
+	if err != nil {
+		t.Fatalf("NotificationPreferences() error = %v", err)
+	}
+	expectedDefaults := model.NotificationPreferences{
+		OnlyMyPullRequests: true,
+	}
+	if preferences != expectedDefaults {
+		t.Fatalf("default preferences = %#v, want %#v", preferences, expectedDefaults)
+	}
+
+	expected := model.NotificationPreferences{Enabled: true}
+	if err := database.SaveNotificationPreferences(ctx, expected); err != nil {
+		t.Fatalf("SaveNotificationPreferences() error = %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	preferences, err = reopened.NotificationPreferences(ctx)
+	if err != nil {
+		t.Fatalf("reopened NotificationPreferences() error = %v", err)
+	}
+	if preferences != expected {
+		t.Fatalf("reopened preferences = %#v, want %#v", preferences, expected)
+	}
+
+	snapshot, err := reopened.Snapshot(ctx, "github.com", false, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if snapshot.Notifications != expected {
+		t.Fatalf("Snapshot().Notifications = %#v, want %#v", snapshot.Notifications, expected)
+	}
+}
+
 func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 	t.Parallel()
 

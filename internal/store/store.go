@@ -109,6 +109,18 @@ CREATE TABLE IF NOT EXISTS poll_resources (
 	revision INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS notification_preferences (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	enabled INTEGER NOT NULL DEFAULT 0,
+	only_my_pull_requests INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT OR IGNORE INTO notification_preferences (
+	id,
+	enabled,
+	only_my_pull_requests
+) VALUES (1, 0, 1);
+
 CREATE INDEX IF NOT EXISTS poll_resources_due
 	ON poll_resources(repository, next_poll_at);
 `
@@ -117,6 +129,44 @@ CREATE INDEX IF NOT EXISTS poll_resources_due
 	}
 	if err := s.migrateWorkItemColumns(ctx); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *Store) NotificationPreferences(
+	ctx context.Context,
+) (model.NotificationPreferences, error) {
+	var preferences model.NotificationPreferences
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT enabled, only_my_pull_requests
+		FROM notification_preferences
+		WHERE id = 1`,
+	).Scan(
+		&preferences.Enabled,
+		&preferences.OnlyMyPullRequests,
+	); err != nil {
+		return model.NotificationPreferences{}, fmt.Errorf(
+			"load notification preferences: %w",
+			err,
+		)
+	}
+	return preferences, nil
+}
+
+func (s *Store) SaveNotificationPreferences(
+	ctx context.Context,
+	preferences model.NotificationPreferences,
+) error {
+	if _, err := s.db.ExecContext(
+		ctx,
+		`UPDATE notification_preferences
+		SET enabled = ?, only_my_pull_requests = ?
+		WHERE id = 1`,
+		preferences.Enabled,
+		preferences.OnlyMyPullRequests,
+	); err != nil {
+		return fmt.Errorf("save notification preferences: %w", err)
 	}
 	return nil
 }
@@ -1146,6 +1196,10 @@ func (s *Store) Snapshot(
 	if err != nil {
 		return model.Snapshot{}, err
 	}
+	preferences, err := s.NotificationPreferences(ctx)
+	if err != nil {
+		return model.Snapshot{}, err
+	}
 
 	syncResource := resources[model.WorkItemsResourceKey(scope)]
 	repositories := make(map[string]struct{})
@@ -1190,7 +1244,8 @@ func (s *Store) Snapshot(
 			LastSuccess: lastSuccess,
 			Error:       syncError,
 		},
-		Items: items,
+		Notifications: preferences,
+		Items:         items,
 	}, nil
 }
 

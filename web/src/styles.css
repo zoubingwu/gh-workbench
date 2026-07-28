@@ -101,6 +101,12 @@ h1 {
   background: #bf8700;
 }
 
+.header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
 .sync-button {
   display: inline-flex;
   flex: 0 0 auto;
@@ -131,6 +137,10 @@ h1 {
 .sync-button:disabled {
   color: var(--fg-muted);
   cursor: wait;
+}
+
+.notification-button:disabled {
+  cursor: not-allowed;
 }
 
 .sync-button:focus-visible,
@@ -595,9 +605,13 @@ h1 {
     display: block;
   }
 
+  .header-actions {
+    display: grid;
+    margin-top: 14px;
+  }
+
   .sync-button {
     width: 100%;
-    margin-top: 14px;
   }
 
   .list-controls {

@@ -99,6 +99,60 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	if controller.triggers != 1 {
 		t.Fatalf("sync trigger count = %d, want 1", controller.triggers)
 	}
+
+	request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/notifications",
+		strings.NewReader(`{"enabled":true,"onlyMyPullRequests":false}`),
+	)
+	request.Host = "127.0.0.1:43123"
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cross-site notification settings status = %d, want 403", response.Code)
+	}
+
+	request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/notifications",
+		strings.NewReader(`{"enabled":true,"unexpected":false}`),
+	)
+	request.Host = "127.0.0.1:43123"
+	request.Header.Set("Origin", "http://127.0.0.1:43123")
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid notification settings status = %d, want 400", response.Code)
+	}
+
+	request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/notifications",
+		strings.NewReader(`{"enabled":true,"onlyMyPullRequests":false}`),
+	)
+	request.Host = "127.0.0.1:43123"
+	request.Header.Set("Origin", "http://127.0.0.1:43123")
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("save notifications status = %d, want 200", response.Code)
+	}
+	expectedPreferences := model.NotificationPreferences{Enabled: true}
+	if database.preferences != expectedPreferences {
+		t.Fatalf(
+			"saved preferences = %#v, want %#v",
+			database.preferences,
+			expectedPreferences,
+		)
+	}
+	if database.saveCalls != 1 {
+		t.Fatalf("notification preference saves = %d, want 1", database.saveCalls)
+	}
 }
 
 func TestServerRejectsNonLoopbackHost(t *testing.T) {
@@ -187,8 +241,10 @@ func TestServerInstancesUseDistinctSessionCookies(t *testing.T) {
 }
 
 type fakeSnapshotStore struct {
-	snapshot model.Snapshot
-	scope    string
+	snapshot    model.Snapshot
+	preferences model.NotificationPreferences
+	scope       string
+	saveCalls   int
 }
 
 func (f *fakeSnapshotStore) Snapshot(
@@ -199,6 +255,15 @@ func (f *fakeSnapshotStore) Snapshot(
 ) (model.Snapshot, error) {
 	f.scope = scope
 	return f.snapshot, nil
+}
+
+func (f *fakeSnapshotStore) SaveNotificationPreferences(
+	_ context.Context,
+	preferences model.NotificationPreferences,
+) error {
+	f.preferences = preferences
+	f.saveCalls++
+	return nil
 }
 
 type fakeController struct {

@@ -58,6 +58,12 @@ as the browser work list. It accepts these keys:
 | `enter`, `o` | Open the selected work item |
 | `q`, `ctrl+c` | Exit |
 
+The browser UI can enable account-scoped macOS system notifications. The Go
+service continues delivering informational notifications while its browser tab
+is closed. The `gh workbench` process must remain running. The “Only my PRs”
+setting also controls which pull request activity can produce a system
+notification.
+
 Upgrade or remove the extension with:
 
 ```sh
@@ -75,8 +81,8 @@ In browser mode, the HTTP service listens on a random `127.0.0.1` port and
 protects each process with a random session token. TUI mode reads snapshots
 directly from the account-scoped SQLite store. SQLite files live under the
 operating system's user cache directory in `gh-workbench`. The cache contains
-repository, issue, pull request, reaction, review, and latest-activity data.
-GitHub Workbench sends no telemetry.
+repository, issue, pull request, reaction, review, latest-activity, and
+notification preference data. GitHub Workbench sends no telemetry.
 
 On Linux, configure a Secret Service-compatible keyring before running
 `gh auth login`.

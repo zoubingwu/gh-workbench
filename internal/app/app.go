@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -19,6 +20,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/browser"
 	"github.com/zoubingwu/gh-workbench/internal/github"
 	"github.com/zoubingwu/gh-workbench/internal/model"
+	"github.com/zoubingwu/gh-workbench/internal/notification"
 	"github.com/zoubingwu/gh-workbench/internal/server"
 	"github.com/zoubingwu/gh-workbench/internal/store"
 	"github.com/zoubingwu/gh-workbench/internal/syncer"
@@ -174,6 +176,41 @@ func Run(ctx context.Context, options Options) error {
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	var notificationWarning sync.Once
+	reportNotificationError := func(err error) {
+		notificationWarning.Do(func() {
+			_, _ = fmt.Fprintf(
+				options.Stderr,
+				"System notifications are unavailable: %v\n",
+				err,
+			)
+		})
+	}
+	var snapshotWarning sync.Once
+	reportSnapshotError := func(err error) {
+		snapshotWarning.Do(func() {
+			_, _ = fmt.Fprintf(
+				options.Stderr,
+				"Snapshot publication failed: %v\n",
+				err,
+			)
+		})
+	}
+	notificationManager := notification.New(notification.SystemSender())
+
+	baselineContext, baselineCancel := context.WithTimeout(
+		runContext,
+		shutdownPeriod,
+	)
+	baseline, err := localServer.PublishSnapshot(baselineContext)
+	baselineCancel()
+	if err != nil {
+		return fmt.Errorf("load initial workbench snapshot: %w", err)
+	}
+	if err := notificationManager.Observe(runContext, baseline); err != nil {
+		reportNotificationError(err)
+	}
+
 	results := make(chan error, 3)
 	go func() {
 		err := httpServer.Serve(listener)
@@ -186,10 +223,29 @@ func Run(ctx context.Context, options Options) error {
 		results <- runner.Run(runContext)
 	}()
 	go func() {
+		publish := func() {
+			publishContext, publishCancel := context.WithTimeout(
+				runContext,
+				shutdownPeriod,
+			)
+			defer publishCancel()
+
+			snapshot, err := localServer.PublishSnapshot(publishContext)
+			if err != nil {
+				reportSnapshotError(err)
+				return
+			}
+			if err := notificationManager.Observe(
+				runContext,
+				snapshot,
+			); err != nil {
+				reportNotificationError(err)
+			}
+		}
 		results <- publishSnapshots(
 			runContext,
 			snapshotUpdates,
-			localServer.PublishSnapshot,
+			publish,
 		)
 	}()
 
