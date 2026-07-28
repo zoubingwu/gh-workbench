@@ -18,6 +18,7 @@ type ResourceKind string
 
 const (
 	ResourceKindWorkItems ResourceKind = "work_items"
+	ResourceKindActivity  ResourceKind = "activity"
 	ResourceKindReactions ResourceKind = "reactions"
 )
 
@@ -48,6 +49,14 @@ type Label struct {
 	Color string `json:"color"`
 }
 
+type Activity struct {
+	Kind       string    `json:"kind"`
+	Actor      string    `json:"actor"`
+	BodyText   string    `json:"bodyText"`
+	OccurredAt time.Time `json:"occurredAt"`
+	URL        string    `json:"url"`
+}
+
 type PollStatus struct {
 	IntervalSeconds int64      `json:"intervalSeconds"`
 	NextPollAt      time.Time  `json:"nextPollAt"`
@@ -58,6 +67,7 @@ type PollStatus struct {
 }
 
 type WorkItem struct {
+	NodeID         string     `json:"-"`
 	Repository     string     `json:"repository"`
 	RepositoryKey  string     `json:"-"`
 	Number         int        `json:"number"`
@@ -75,6 +85,7 @@ type WorkItem struct {
 	Additions      int        `json:"additions"`
 	Deletions      int        `json:"deletions"`
 	Labels         []Label    `json:"labels"`
+	LatestActivity *Activity  `json:"latestActivity"`
 	Reactions      []Reaction `json:"reactions"`
 	Poll           PollStatus `json:"poll"`
 }
@@ -89,6 +100,20 @@ type ReactionsResult struct {
 	Reactions []Reaction
 	ETag      string
 	Unchanged bool
+}
+
+type ActivityTarget struct {
+	NodeID         string
+	Repository     Repository
+	Number         int
+	Kind           ItemKind
+	LatestActivity *Activity
+	ETag           string
+}
+
+type ActivityResult struct {
+	Activity *Activity
+	ETag     string
 }
 
 type SyncStatus struct {
@@ -121,6 +146,9 @@ type PollResource struct {
 	ResourceUpdatedAt time.Time
 	UnchangedCount    int
 	LastError         string
+	NodeID            string
+	ItemKind          ItemKind
+	LatestActivity    *Activity
 }
 
 func WorkItemsResourceKey(host string) string {
@@ -129,6 +157,10 @@ func WorkItemsResourceKey(host string) string {
 
 func ReactionResourceKey(repository string, number int) string {
 	return repository + ":pull:" + strconv.Itoa(number) + ":reactions"
+}
+
+func ActivityResourceKey(repository string, number int) string {
+	return repository + ":item:" + strconv.Itoa(number) + ":activity"
 }
 
 func ParseRepositoryKey(key string) (Repository, error) {

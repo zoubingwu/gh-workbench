@@ -58,6 +58,7 @@ func (s *Store) initialize(ctx context.Context) error {
 CREATE TABLE IF NOT EXISTS work_items (
 	repository TEXT NOT NULL,
 	number INTEGER NOT NULL,
+	node_id TEXT NOT NULL DEFAULT '',
 	kind TEXT NOT NULL,
 	title TEXT NOT NULL,
 	url TEXT NOT NULL,
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS work_items (
 	additions INTEGER NOT NULL DEFAULT 0,
 	deletions INTEGER NOT NULL DEFAULT 0,
 	labels_json TEXT NOT NULL DEFAULT '[]',
+	latest_activity_json TEXT,
 	missing_polls INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (repository, number)
 );
@@ -158,6 +160,7 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 		name string
 		sql  string
 	}{
+		{name: "node_id", sql: "ALTER TABLE work_items ADD COLUMN node_id TEXT NOT NULL DEFAULT ''"},
 		{name: "is_draft", sql: "ALTER TABLE work_items ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0"},
 		{name: "review_decision", sql: "ALTER TABLE work_items ADD COLUMN review_decision TEXT NOT NULL DEFAULT ''"},
 		{name: "merge_state", sql: "ALTER TABLE work_items ADD COLUMN merge_state TEXT NOT NULL DEFAULT ''"},
@@ -165,6 +168,7 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 		{name: "additions", sql: "ALTER TABLE work_items ADD COLUMN additions INTEGER NOT NULL DEFAULT 0"},
 		{name: "deletions", sql: "ALTER TABLE work_items ADD COLUMN deletions INTEGER NOT NULL DEFAULT 0"},
 		{name: "labels_json", sql: "ALTER TABLE work_items ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]'"},
+		{name: "latest_activity_json", sql: "ALTER TABLE work_items ADD COLUMN latest_activity_json TEXT"},
 		{name: "missing_polls", sql: "ALTER TABLE work_items ADD COLUMN missing_polls INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, migration := range migrations {
@@ -241,6 +245,7 @@ func (s *Store) EnsureAccount(
 }
 
 type itemRecord struct {
+	nodeID         string
 	kind           model.ItemKind
 	title          string
 	url            string
@@ -255,6 +260,7 @@ type itemRecord struct {
 	additions      int
 	deletions      int
 	labelsJSON     string
+	activityJSON   sql.NullString
 	missingPolls   int
 }
 
@@ -322,7 +328,12 @@ func (s *Store) ReplaceRelevantOpenItems(
 			return false, fmt.Errorf("encode work item labels for %q: %w", item.URL, err)
 		}
 		labelsJSON := string(encodedLabels)
+		activityJSON, err := encodeActivity(item.LatestActivity)
+		if err != nil {
+			return false, fmt.Errorf("encode latest activity for %q: %w", item.URL, err)
+		}
 		record := itemRecord{
+			nodeID:         item.NodeID,
 			kind:           item.Kind,
 			title:          item.Title,
 			url:            item.URL,
@@ -337,8 +348,13 @@ func (s *Store) ReplaceRelevantOpenItems(
 			additions:      item.Additions,
 			deletions:      item.Deletions,
 			labelsJSON:     labelsJSON,
+			activityJSON:   activityJSON,
 		}
-		if old, ok := existing[key]; !ok || old != record {
+		old, exists := existing[key]
+		if !activityJSON.Valid && exists {
+			record.activityJSON = old.activityJSON
+		}
+		if !exists || old != record {
 			changed = true
 		}
 
@@ -347,6 +363,7 @@ func (s *Store) ReplaceRelevantOpenItems(
 			`INSERT INTO work_items (
 				repository,
 				number,
+				node_id,
 				kind,
 				title,
 				url,
@@ -361,9 +378,11 @@ func (s *Store) ReplaceRelevantOpenItems(
 				additions,
 				deletions,
 				labels_json,
+				latest_activity_json,
 				missing_polls
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(repository, number) DO UPDATE SET
+				node_id = excluded.node_id,
 				kind = excluded.kind,
 				title = excluded.title,
 				url = excluded.url,
@@ -378,9 +397,14 @@ func (s *Store) ReplaceRelevantOpenItems(
 				additions = excluded.additions,
 				deletions = excluded.deletions,
 				labels_json = excluded.labels_json,
+				latest_activity_json = COALESCE(
+					excluded.latest_activity_json,
+					work_items.latest_activity_json
+				),
 				missing_polls = 0`,
 			item.RepositoryKey,
 			item.Number,
+			item.NodeID,
 			item.Kind,
 			item.Title,
 			item.URL,
@@ -395,10 +419,20 @@ func (s *Store) ReplaceRelevantOpenItems(
 			item.Additions,
 			item.Deletions,
 			labelsJSON,
+			activityJSON,
 		); err != nil {
 			return false, fmt.Errorf("upsert work item %q: %w", item.URL, err)
 		}
 
+		if err := ensureActivityResource(
+			ctx,
+			tx,
+			item.RepositoryKey,
+			item,
+			now,
+		); err != nil {
+			return false, err
+		}
 		if item.Kind == model.ItemKindPullRequest {
 			if err := ensureReactionResource(
 				ctx,
@@ -428,6 +462,9 @@ func (s *Store) ReplaceRelevantOpenItems(
 		}
 		missingPolls := record.missingPolls + 1
 		if missingPolls >= missingPollsBeforeDelete {
+			if err := deleteActivityResource(ctx, tx, key.repository, key.number); err != nil {
+				return false, err
+			}
 			if err := deleteReactionResource(ctx, tx, key.repository, key.number); err != nil {
 				return false, err
 			}
@@ -480,6 +517,7 @@ func loadItemRecords(
 		`SELECT
 			repository,
 			number,
+			node_id,
 			kind,
 			title,
 			url,
@@ -494,6 +532,7 @@ func loadItemRecords(
 			additions,
 			deletions,
 			labels_json,
+			latest_activity_json,
 			missing_polls
 		FROM work_items
 		WHERE repository = ? OR repository GLOB ?`,
@@ -516,6 +555,7 @@ func loadItemRecords(
 		if err := rows.Scan(
 			&key.repository,
 			&key.number,
+			&record.nodeID,
 			&record.kind,
 			&record.title,
 			&record.url,
@@ -530,6 +570,7 @@ func loadItemRecords(
 			&record.additions,
 			&record.deletions,
 			&record.labelsJSON,
+			&record.activityJSON,
 			&record.missingPolls,
 		); err != nil {
 			return nil, fmt.Errorf("scan existing work item: %w", err)
@@ -544,12 +585,46 @@ func loadItemRecords(
 	return records, nil
 }
 
+func ensureActivityResource(
+	ctx context.Context,
+	tx *sql.Tx,
+	repository string,
+	item model.WorkItem,
+	now time.Time,
+) error {
+	return ensureItemResource(ctx, tx, model.PollResource{
+		Key:               model.ActivityResourceKey(repository, item.Number),
+		Repository:        repository,
+		Kind:              model.ResourceKindActivity,
+		Number:            item.Number,
+		Interval:          initialInterval,
+		NextPollAt:        now,
+		ResourceUpdatedAt: item.UpdatedAt,
+	})
+}
+
 func ensureReactionResource(
 	ctx context.Context,
 	tx *sql.Tx,
 	repository string,
 	item model.WorkItem,
 	now time.Time,
+) error {
+	return ensureItemResource(ctx, tx, model.PollResource{
+		Key:               model.ReactionResourceKey(repository, item.Number),
+		Repository:        repository,
+		Kind:              model.ResourceKindReactions,
+		Number:            item.Number,
+		Interval:          initialInterval,
+		NextPollAt:        now,
+		ResourceUpdatedAt: item.UpdatedAt,
+	})
+}
+
+func ensureItemResource(
+	ctx context.Context,
+	tx *sql.Tx,
+	resource model.PollResource,
 ) error {
 	_, err := tx.ExecContext(
 		ctx,
@@ -584,16 +659,38 @@ func ensureReactionResource(
 					THEN poll_resources.revision + 1
 				ELSE poll_resources.revision
 			END`,
-		model.ReactionResourceKey(repository, item.Number),
-		repository,
-		model.ResourceKindReactions,
-		item.Number,
-		initialInterval.Nanoseconds(),
-		now.UnixNano(),
-		item.UpdatedAt.UnixNano(),
+		resource.Key,
+		resource.Repository,
+		resource.Kind,
+		resource.Number,
+		resource.Interval.Nanoseconds(),
+		resource.NextPollAt.UnixNano(),
+		resource.ResourceUpdatedAt.UnixNano(),
 	)
 	if err != nil {
-		return fmt.Errorf("ensure reaction resource for item %d: %w", item.Number, err)
+		return fmt.Errorf(
+			"ensure %s resource for item %d: %w",
+			resource.Kind,
+			resource.Number,
+			err,
+		)
+	}
+	return nil
+}
+
+func deleteActivityResource(
+	ctx context.Context,
+	tx *sql.Tx,
+	repository string,
+	number int,
+) error {
+	_, err := tx.ExecContext(
+		ctx,
+		"DELETE FROM poll_resources WHERE resource_key = ?",
+		model.ActivityResourceKey(repository, number),
+	)
+	if err != nil {
+		return fmt.Errorf("delete activity resource for item %d: %w", number, err)
 	}
 	return nil
 }
@@ -710,6 +807,75 @@ func (s *Store) ReplaceReactions(
 	return true, true, nil
 }
 
+func (s *Store) ReplaceActivity(
+	ctx context.Context,
+	repository string,
+	number int,
+	expectedRevision int64,
+	activity *model.Activity,
+) (bool, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, false, fmt.Errorf("begin activity reconciliation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		revision int64
+		existing sql.NullString
+	)
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT poll_resources.revision, work_items.latest_activity_json
+		FROM work_items
+		JOIN poll_resources ON poll_resources.resource_key = ?
+		WHERE work_items.repository = ?
+			AND work_items.number = ?
+			AND poll_resources.kind = ?`,
+		model.ActivityResourceKey(repository, number),
+		repository,
+		number,
+		model.ResourceKindActivity,
+	).Scan(&revision, &existing)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf(
+			"find poll resource for item %d activity: %w",
+			number,
+			err,
+		)
+	}
+	if revision != expectedRevision {
+		return false, false, nil
+	}
+
+	encoded, err := encodeActivity(activity)
+	if err != nil {
+		return false, false, fmt.Errorf("encode activity for item %d: %w", number, err)
+	}
+	if existing == encoded {
+		return false, true, nil
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE work_items
+		SET latest_activity_json = ?
+		WHERE repository = ? AND number = ?`,
+		encoded,
+		repository,
+		number,
+	); err != nil {
+		return false, false, fmt.Errorf("update activity for item %d: %w", number, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, false, fmt.Errorf("commit activity reconciliation: %w", err)
+	}
+	return true, true, nil
+}
+
 type queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
@@ -766,29 +932,38 @@ func (s *Store) ListDueResources(
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT
-			resource_key,
-			repository,
-			kind,
-			number,
-			etag,
-			interval_ns,
-			next_poll_at,
-			last_poll_at,
-			last_success_at,
-			last_changed_at,
-			resource_updated_at,
-			unchanged_count,
-			last_error,
-			revision
+			poll_resources.resource_key,
+			poll_resources.repository,
+			poll_resources.kind,
+			poll_resources.number,
+			poll_resources.etag,
+			poll_resources.interval_ns,
+			poll_resources.next_poll_at,
+			poll_resources.last_poll_at,
+			poll_resources.last_success_at,
+			poll_resources.last_changed_at,
+			poll_resources.resource_updated_at,
+			poll_resources.unchanged_count,
+			poll_resources.last_error,
+			poll_resources.revision,
+			work_items.node_id,
+			work_items.kind,
+			work_items.latest_activity_json
 		FROM poll_resources
-		WHERE (repository = ? OR repository GLOB ?) AND next_poll_at <= ?
+		LEFT JOIN work_items
+			ON work_items.repository = poll_resources.repository
+			AND work_items.number = poll_resources.number
+		WHERE (
+			poll_resources.repository = ?
+			OR poll_resources.repository GLOB ?
+		) AND poll_resources.next_poll_at <= ?
 			ORDER BY
-				next_poll_at,
-				CASE kind
+				poll_resources.next_poll_at,
+				CASE poll_resources.kind
 					WHEN ? THEN 0
 					ELSE 1
 				END,
-				resource_key
+				poll_resources.resource_key
 		LIMIT ?`,
 		scope,
 		scope+"/*",
@@ -949,6 +1124,7 @@ func (s *Store) loadItems(
 		`SELECT
 			repository,
 			number,
+			node_id,
 			kind,
 			title,
 			url,
@@ -962,7 +1138,8 @@ func (s *Store) loadItems(
 			needs_review,
 			additions,
 			deletions,
-			labels_json
+			labels_json,
+			latest_activity_json
 		FROM work_items
 		WHERE (repository = ? OR repository GLOB ?)
 			AND missing_polls = 0
@@ -977,14 +1154,16 @@ func (s *Store) loadItems(
 	items := make([]model.WorkItem, 0)
 	for rows.Next() {
 		var (
-			item       model.WorkItem
-			createdAt  int64
-			updatedAt  int64
-			labelsJSON string
+			item         model.WorkItem
+			createdAt    int64
+			updatedAt    int64
+			labelsJSON   string
+			activityJSON sql.NullString
 		)
 		if err := rows.Scan(
 			&item.RepositoryKey,
 			&item.Number,
+			&item.NodeID,
 			&item.Kind,
 			&item.Title,
 			&item.URL,
@@ -999,6 +1178,7 @@ func (s *Store) loadItems(
 			&item.Additions,
 			&item.Deletions,
 			&labelsJSON,
+			&activityJSON,
 		); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan snapshot work item: %w", err)
@@ -1016,6 +1196,16 @@ func (s *Store) loadItems(
 		}
 		if item.Labels == nil {
 			item.Labels = make([]model.Label, 0)
+		}
+		item.LatestActivity, err = decodeActivity(activityJSON)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf(
+				"decode snapshot activity for %s#%d: %w",
+				item.RepositoryKey,
+				item.Number,
+				err,
+			)
 		}
 		repository, err := model.ParseRepositoryKey(item.RepositoryKey)
 		if err != nil {
@@ -1107,22 +1297,29 @@ func (s *Store) loadResources(
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT
-			resource_key,
-			repository,
-			kind,
-			number,
-			etag,
-			interval_ns,
-			next_poll_at,
-			last_poll_at,
-			last_success_at,
-			last_changed_at,
-			resource_updated_at,
-			unchanged_count,
-			last_error,
-			revision
+			poll_resources.resource_key,
+			poll_resources.repository,
+			poll_resources.kind,
+			poll_resources.number,
+			poll_resources.etag,
+			poll_resources.interval_ns,
+			poll_resources.next_poll_at,
+			poll_resources.last_poll_at,
+			poll_resources.last_success_at,
+			poll_resources.last_changed_at,
+			poll_resources.resource_updated_at,
+			poll_resources.unchanged_count,
+			poll_resources.last_error,
+			poll_resources.revision,
+			work_items.node_id,
+			work_items.kind,
+			work_items.latest_activity_json
 		FROM poll_resources
-		WHERE repository = ? OR repository GLOB ?`,
+		LEFT JOIN work_items
+			ON work_items.repository = poll_resources.repository
+			AND work_items.number = poll_resources.number
+		WHERE poll_resources.repository = ?
+			OR poll_resources.repository GLOB ?`,
 		scope,
 		scope+"/*",
 	)
@@ -1158,6 +1355,9 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 		lastSuccessAt     sql.NullInt64
 		lastChangedAt     sql.NullInt64
 		resourceUpdatedAt int64
+		nodeID            sql.NullString
+		itemKind          sql.NullString
+		activityJSON      sql.NullString
 	)
 	if err := row.Scan(
 		&resource.Key,
@@ -1174,6 +1374,9 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 		&resource.UnchangedCount,
 		&resource.LastError,
 		&resource.Revision,
+		&nodeID,
+		&itemKind,
+		&activityJSON,
 	); err != nil {
 		return model.PollResource{}, fmt.Errorf("scan poll resource: %w", err)
 	}
@@ -1183,6 +1386,17 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 	resource.LastSuccessAt = pointerTime(lastSuccessAt)
 	resource.LastChangedAt = pointerTime(lastChangedAt)
 	resource.ResourceUpdatedAt = time.Unix(0, resourceUpdatedAt).UTC()
+	resource.NodeID = nodeID.String
+	resource.ItemKind = model.ItemKind(itemKind.String)
+	activity, err := decodeActivity(activityJSON)
+	if err != nil {
+		return model.PollResource{}, fmt.Errorf(
+			"decode poll resource %q activity: %w",
+			resource.Key,
+			err,
+		)
+	}
+	resource.LatestActivity = activity
 	return resource, nil
 }
 
@@ -1210,4 +1424,26 @@ func pointerTime(value sql.NullInt64) *time.Time {
 	}
 	parsed := time.Unix(0, value.Int64).UTC()
 	return &parsed
+}
+
+func encodeActivity(activity *model.Activity) (sql.NullString, error) {
+	if activity == nil {
+		return sql.NullString{}, nil
+	}
+	encoded, err := json.Marshal(activity)
+	if err != nil {
+		return sql.NullString{}, err
+	}
+	return sql.NullString{String: string(encoded), Valid: true}, nil
+}
+
+func decodeActivity(encoded sql.NullString) (*model.Activity, error) {
+	if !encoded.Valid {
+		return nil, nil
+	}
+	var activity model.Activity
+	if err := json.Unmarshal([]byte(encoded.String), &activity); err != nil {
+		return nil, err
+	}
+	return &activity, nil
 }

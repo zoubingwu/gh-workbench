@@ -169,12 +169,17 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDueResources() error = %v", err)
 	}
-	if len(due) != 2 {
-		t.Fatalf("len(ListDueResources()) = %d, want 2", len(due))
+	if len(due) != 4 {
+		t.Fatalf("len(ListDueResources()) = %d, want 4", len(due))
 	}
-	if due[0].Kind != model.ResourceKindWorkItems ||
-		due[1].Kind != model.ResourceKindReactions {
-		t.Fatalf("due resource kinds = %q, %q", due[0].Kind, due[1].Kind)
+	counts := make(map[model.ResourceKind]int)
+	for _, resource := range due {
+		counts[resource.Kind]++
+	}
+	if counts[model.ResourceKindWorkItems] != 1 ||
+		counts[model.ResourceKindActivity] != 2 ||
+		counts[model.ResourceKindReactions] != 1 {
+		t.Fatalf("due resource counts = %#v", counts)
 	}
 
 	changed, err = database.ReplaceRelevantOpenItems(
@@ -231,6 +236,12 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 	for _, resource := range due {
 		if resource.Kind == model.ResourceKindReactions {
 			t.Fatalf("reaction resource remained after confirmed removal: %#v", resource)
+		}
+		if resource.Key == model.ActivityResourceKey(
+			"github.com/acme/rocket",
+			7,
+		) {
+			t.Fatalf("activity resource remained after confirmed removal: %#v", resource)
 		}
 	}
 
@@ -307,6 +318,117 @@ func TestStoreKeepsSameNumberItemsFromDifferentRepositories(t *testing.T) {
 	}
 	if snapshot.RepositoryCount != 2 {
 		t.Fatalf("Snapshot().RepositoryCount = %d, want 2", snapshot.RepositoryCount)
+	}
+}
+
+func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(filepath.Join(t.TempDir(), "workbench.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	now := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
+	host := "github.com"
+	if err := database.EnsureAccount(ctx, host, now); err != nil {
+		t.Fatalf("EnsureAccount() error = %v", err)
+	}
+	item := model.WorkItem{
+		NodeID:        "I_kwDOExample",
+		RepositoryKey: "github.com/acme/api",
+		Number:        12,
+		Kind:          model.ItemKindIssue,
+		Title:         "Track API errors",
+		URL:           "https://github.com/acme/api/issues/12",
+		State:         "open",
+		Author:        "octocat",
+		CreatedAt:     now.Add(-time.Hour),
+		UpdatedAt:     now,
+	}
+	if _, err := database.ReplaceRelevantOpenItems(
+		ctx,
+		host,
+		[]model.WorkItem{item},
+		now,
+	); err != nil {
+		t.Fatalf("ReplaceRelevantOpenItems() error = %v", err)
+	}
+
+	due, err := database.ListDueResources(ctx, host, now, 10)
+	if err != nil {
+		t.Fatalf("ListDueResources() error = %v", err)
+	}
+	var activityResource model.PollResource
+	for _, resource := range due {
+		if resource.Kind == model.ResourceKindActivity {
+			activityResource = resource
+		}
+	}
+	if activityResource.Key != model.ActivityResourceKey(item.RepositoryKey, item.Number) {
+		t.Fatalf(
+			"activity resource key = %q, want %q",
+			activityResource.Key,
+			model.ActivityResourceKey(item.RepositoryKey, item.Number),
+		)
+	}
+
+	activity := &model.Activity{
+		Kind:       "comment",
+		Actor:      "reviewer",
+		BodyText:   "Please cover the retry case.",
+		OccurredAt: now.Add(-time.Minute),
+		URL:        "https://github.com/acme/api/issues/12#issuecomment-1",
+	}
+	changed, applied, err := database.ReplaceActivity(
+		ctx,
+		item.RepositoryKey,
+		item.Number,
+		activityResource.Revision,
+		activity,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceActivity() error = %v", err)
+	}
+	if !changed || !applied {
+		t.Fatalf(
+			"ReplaceActivity() = changed %t, applied %t; want true, true",
+			changed,
+			applied,
+		)
+	}
+
+	if _, err := database.ReplaceRelevantOpenItems(
+		ctx,
+		host,
+		[]model.WorkItem{item},
+		now.Add(time.Minute),
+	); err != nil {
+		t.Fatalf("refresh ReplaceRelevantOpenItems() error = %v", err)
+	}
+	snapshot, err := database.Snapshot(ctx, host, false, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(snapshot.Items) != 1 {
+		t.Fatalf("len(Snapshot().Items) = %d, want 1", len(snapshot.Items))
+	}
+	got := snapshot.Items[0]
+	if got.NodeID != item.NodeID {
+		t.Fatalf("Snapshot().Items[0].NodeID = %q, want %q", got.NodeID, item.NodeID)
+	}
+	if got.LatestActivity == nil || *got.LatestActivity != *activity {
+		t.Fatalf(
+			"Snapshot().Items[0].LatestActivity = %#v, want %#v",
+			got.LatestActivity,
+			activity,
+		)
 	}
 }
 
@@ -481,12 +603,18 @@ func TestForceDueRefreshesSearchAndReactions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDueResources() after ForceDue error = %v", err)
 	}
-	if len(due) != 2 {
-		t.Fatalf("forced resources = %#v, want search and reaction resources", due)
+	if len(due) != 3 {
+		t.Fatalf("forced resources = %#v, want search, activity, and reaction resources", due)
 	}
 	if due[0].Kind != model.ResourceKindWorkItems ||
-		due[1].Kind != model.ResourceKindReactions {
-		t.Fatalf("forced resource kinds = %q, %q", due[0].Kind, due[1].Kind)
+		due[1].Kind != model.ResourceKindActivity ||
+		due[2].Kind != model.ResourceKindReactions {
+		t.Fatalf(
+			"forced resource kinds = %q, %q, %q",
+			due[0].Kind,
+			due[1].Kind,
+			due[2].Kind,
+		)
 	}
 }
 
@@ -611,6 +739,128 @@ func TestStaleReactionPollDoesNotOverwriteHotReset(t *testing.T) {
 	}
 }
 
+func TestStaleActivityPollDoesNotOverwriteHotReset(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(filepath.Join(t.TempDir(), "workbench.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	now := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
+	host := "github.com"
+	if err := database.EnsureAccount(ctx, host, now); err != nil {
+		t.Fatalf("EnsureAccount() error = %v", err)
+	}
+	item := model.WorkItem{
+		NodeID:        "I_kwDOExample",
+		RepositoryKey: "github.com/acme/api",
+		Number:        7,
+		Kind:          model.ItemKindIssue,
+		Title:         "Track retries",
+		URL:           "https://github.com/acme/api/issues/7",
+		State:         "open",
+		Author:        "octocat",
+		CreatedAt:     now.Add(-time.Hour),
+		UpdatedAt:     now.Add(-time.Minute),
+	}
+	if _, err := database.ReplaceRelevantOpenItems(
+		ctx,
+		host,
+		[]model.WorkItem{item},
+		now,
+	); err != nil {
+		t.Fatalf("ReplaceRelevantOpenItems() error = %v", err)
+	}
+	due, err := database.ListDueResources(ctx, host, now, 10)
+	if err != nil {
+		t.Fatalf("ListDueResources() error = %v", err)
+	}
+	var stale model.PollResource
+	for _, resource := range due {
+		if resource.Kind == model.ResourceKindActivity {
+			stale = resource
+		}
+	}
+	if stale.Key == "" {
+		t.Fatal("activity resource missing")
+	}
+	initial := &model.Activity{
+		Kind:       "comment",
+		Actor:      "reviewer",
+		BodyText:   "Initial feedback",
+		OccurredAt: now,
+		URL:        "https://github.com/acme/api/issues/7#issuecomment-1",
+	}
+	changed, applied, err := database.ReplaceActivity(
+		ctx,
+		item.RepositoryKey,
+		item.Number,
+		stale.Revision,
+		initial,
+	)
+	if err != nil {
+		t.Fatalf("seed activity error: %v", err)
+	}
+	if !changed || !applied {
+		t.Fatalf("seed activity = changed %t, applied %t; want true, true", changed, applied)
+	}
+
+	item.UpdatedAt = now.Add(time.Minute)
+	if _, err := database.ReplaceRelevantOpenItems(
+		ctx,
+		host,
+		[]model.WorkItem{item},
+		now.Add(time.Minute),
+	); err != nil {
+		t.Fatalf("hot reset error = %v", err)
+	}
+	staleActivity := &model.Activity{
+		Kind:       "comment",
+		Actor:      "reviewer",
+		BodyText:   "Stale feedback",
+		OccurredAt: now.Add(time.Minute),
+		URL:        "https://github.com/acme/api/issues/7#issuecomment-2",
+	}
+	changed, applied, err = database.ReplaceActivity(
+		ctx,
+		item.RepositoryKey,
+		item.Number,
+		stale.Revision,
+		staleActivity,
+	)
+	if err != nil {
+		t.Fatalf("stale activity replacement error: %v", err)
+	}
+	if changed || applied {
+		t.Fatalf(
+			"stale activity replacement = changed %t, applied %t; want false, false",
+			changed,
+			applied,
+		)
+	}
+
+	snapshot, err := database.Snapshot(ctx, host, false, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Snapshot() after stale replacement error = %v", err)
+	}
+	if len(snapshot.Items) != 1 ||
+		snapshot.Items[0].LatestActivity == nil ||
+		*snapshot.Items[0].LatestActivity != *initial {
+		t.Fatalf(
+			"activity after stale replacement = %#v, want %#v",
+			snapshot.Items,
+			initial,
+		)
+	}
+}
+
 func TestOpenMigratesWorkItemColumns(t *testing.T) {
 	t.Parallel()
 
@@ -673,6 +923,7 @@ func TestOpenMigratesWorkItemColumns(t *testing.T) {
 		columns[name] = struct{}{}
 	}
 	for _, name := range []string{
+		"node_id",
 		"is_draft",
 		"review_decision",
 		"merge_state",
@@ -680,6 +931,7 @@ func TestOpenMigratesWorkItemColumns(t *testing.T) {
 		"additions",
 		"deletions",
 		"labels_json",
+		"latest_activity_json",
 		"missing_polls",
 	} {
 		if _, ok := columns[name]; !ok {
