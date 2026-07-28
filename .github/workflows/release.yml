@@ -26,16 +26,20 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
+      - uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
         working-directory: web
 
-      - name: Build frontend
-        run: pnpm build
-        working-directory: web
+      - name: Check release
+        run: make check
 
       - uses: cli/gh-extension-precompile@v2.2.0
         with:
+          build_script_override: script/build-release.sh
           generate_attestations: true
-          go_build_options: ./cmd/gh-workbench
           go_version_file: go.mod

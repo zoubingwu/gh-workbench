@@ -5,6 +5,7 @@
 *.db-shm
 *.db-wal
 coverage/
+/dist/
 node_modules/
 web/node_modules/
 /internal/webui/dist/
