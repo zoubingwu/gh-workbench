@@ -1133,7 +1133,6 @@ func TestOpenClearsActivityETagWithoutReviewCommentCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() after interrupted migration error = %v", err)
 	}
-	defer reopened.Close()
 
 	var etag string
 	if err := reopened.db.QueryRow(
@@ -1144,5 +1143,60 @@ func TestOpenClearsActivityETagWithoutReviewCommentCache(t *testing.T) {
 	}
 	if etag != "" {
 		t.Fatalf("healed activity ETag = %q, want empty cache reset", etag)
+	}
+
+	due, err := reopened.ListDueResources(ctx, "github.com", now, 10)
+	if err != nil {
+		t.Fatalf("ListDueResources() error = %v", err)
+	}
+	var activityResource model.PollResource
+	for _, resource := range due {
+		if resource.Key == model.ActivityResourceKey(item.RepositoryKey, item.Number) {
+			activityResource = resource
+			break
+		}
+	}
+	if activityResource.Key == "" {
+		t.Fatal("activity resource missing")
+	}
+	changed, applied, err := reopened.ReplaceActivity(
+		ctx,
+		item.RepositoryKey,
+		item.Number,
+		activityResource.Revision,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceActivity() with empty review cache error = %v", err)
+	}
+	if changed || !applied {
+		t.Fatalf(
+			"empty review cache replacement = changed %t, applied %t; want false, true",
+			changed,
+			applied,
+		)
+	}
+	activityResource.ETag = `"empty-inline"`
+	if err := reopened.SavePollResource(ctx, activityResource); err != nil {
+		t.Fatalf("SavePollResource() error = %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close() after empty review cache error = %v", err)
+	}
+
+	reopened, err = Open(path)
+	if err != nil {
+		t.Fatalf("Open() with initialized empty review cache error = %v", err)
+	}
+	defer reopened.Close()
+	if err := reopened.db.QueryRow(
+		"SELECT etag FROM poll_resources WHERE resource_key = ?",
+		model.ActivityResourceKey(item.RepositoryKey, item.Number),
+	).Scan(&etag); err != nil {
+		t.Fatalf("load retained empty-cache ETag: %v", err)
+	}
+	if etag != `"empty-inline"` {
+		t.Fatalf("empty-cache ETag = %q, want retained value", etag)
 	}
 }

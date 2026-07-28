@@ -919,13 +919,16 @@ func (s *Store) ReplaceActivity(
 	if err != nil {
 		return false, false, fmt.Errorf("encode activity for item %d: %w", number, err)
 	}
-	encodedReviewComment, err := encodeActivity(latestReviewComment)
-	if err != nil {
-		return false, false, fmt.Errorf(
-			"encode review comment for item %d: %w",
-			number,
-			err,
-		)
+	encodedReviewComment := sql.NullString{String: "null", Valid: true}
+	if latestReviewComment != nil {
+		encodedReviewComment, err = encodeActivity(latestReviewComment)
+		if err != nil {
+			return false, false, fmt.Errorf(
+				"encode review comment for item %d: %w",
+				number,
+				err,
+			)
+		}
 	}
 	activityChanged := existingActivity != encodedActivity
 	if !activityChanged && existingReviewComment == encodedReviewComment {
@@ -1515,6 +1518,9 @@ func encodeActivity(activity *model.Activity) (sql.NullString, error) {
 
 func decodeActivity(encoded sql.NullString) (*model.Activity, error) {
 	if !encoded.Valid {
+		return nil, nil
+	}
+	if strings.TrimSpace(encoded.String) == "null" {
 		return nil, nil
 	}
 	var activity model.Activity
