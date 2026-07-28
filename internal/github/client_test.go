@@ -6,10 +6,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +40,9 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 		if !strings.Contains(payload.Query, "labels(first: 100") {
 			t.Fatalf("GraphQL query = %q, want issue labels", payload.Query)
 		}
+		if !strings.Contains(payload.Query, "\n        id\n") {
+			t.Fatalf("GraphQL query = %q, want global node IDs", payload.Query)
+		}
 		queries = append(queries, payload.Variables.Query)
 
 		switch {
@@ -45,6 +50,7 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 			return jsonResponse(http.StatusOK, graphQLPage(`[
 				{
 					"__typename": "PullRequest",
+					"id": "PR_rocket_7",
 					"number": 7,
 					"title": "Ship the rocket",
 					"url": "https://github.com/acme/rocket/pull/7",
@@ -64,6 +70,7 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 			return jsonResponse(http.StatusOK, graphQLPage(`[
 				{
 					"__typename": "PullRequest",
+					"id": "PR_satellite_11",
 					"number": 11,
 					"title": "Keep the satellite online",
 					"url": "https://github.com/octocat/satellite/pull/11",
@@ -83,6 +90,7 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 			return jsonResponse(http.StatusOK, graphQLPage(`[
 				{
 					"__typename": "PullRequest",
+					"id": "PR_rocket_7",
 					"number": 7,
 					"title": "Ship the rocket",
 					"url": "https://github.com/acme/rocket/pull/7",
@@ -99,6 +107,7 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 				},
 				{
 					"__typename": "Issue",
+					"id": "I_rocket_3",
 					"number": 3,
 					"title": "Track fuel",
 					"url": "https://github.com/acme/rocket/issues/3",
@@ -116,6 +125,7 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 				},
 				{
 					"__typename": "Issue",
+					"id": "I_rocket_2",
 					"number": 2,
 					"title": "Already closed",
 					"url": "https://github.com/acme/rocket/issues/2",
@@ -130,6 +140,7 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 			return jsonResponse(http.StatusOK, graphQLPage(`[
 				{
 					"__typename": "Issue",
+					"id": "I_rocket_3",
 					"number": 3,
 					"title": "Track fuel",
 					"url": "https://github.com/acme/rocket/issues/3",
@@ -150,6 +161,7 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 			return jsonResponse(http.StatusOK, graphQLPage(`[
 				{
 					"__typename": "PullRequest",
+					"id": "PR_satellite_11",
 					"number": 11,
 					"title": "Keep the satellite online",
 					"url": "https://github.com/octocat/satellite/pull/11",
@@ -248,6 +260,9 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 	issue := byURL["https://github.com/acme/rocket/issues/3"]
 	if issue.Kind != model.ItemKindIssue {
 		t.Fatalf("issue kind = %q, want issue", issue.Kind)
+	}
+	if issue.NodeID != "I_rocket_3" {
+		t.Fatalf("issue node ID = %q, want I_rocket_3", issue.NodeID)
 	}
 	wantLabels := []model.Label{
 		{Name: "bug", Color: "d73a4a"},
@@ -555,6 +570,622 @@ func TestClientFetchesReactions(t *testing.T) {
 	}
 	if result.Reactions[0].Content != "eyes" {
 		t.Fatalf("reaction content = %q, want eyes", result.Reactions[0].Content)
+	}
+}
+
+func TestClientFetchLatestActivitiesSelectsNewestGraphQLCandidate(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		if request.URL.Path != "/graphql" {
+			t.Fatalf("request path = %q, want /graphql", request.URL.Path)
+		}
+		var payload struct {
+			Query     string `json:"query"`
+			Variables struct {
+				IDs []string `json:"ids"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode GraphQL request: %v", err)
+		}
+		if !slices.Equal(payload.Variables.IDs, []string{"I_comment", "I_label"}) {
+			t.Fatalf(
+				"GraphQL node IDs = %q, want [I_comment I_label]",
+				payload.Variables.IDs,
+			)
+		}
+		for _, fragment := range []string{
+			"nodes(ids: $ids)",
+			"comments(first: 1",
+			"orderBy: {field: UPDATED_AT, direction: DESC}",
+			"timelineItems(last: 1",
+			"... on LabeledEvent",
+		} {
+			if !strings.Contains(payload.Query, fragment) {
+				t.Fatalf("GraphQL query = %q, want fragment %q", payload.Query, fragment)
+			}
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(response, `{
+			"data": {
+				"nodes": [
+					{
+						"__typename": "Issue",
+						"id": "I_label",
+						"url": "https://github.com/acme/rocket/issues/2",
+						"comments": {
+							"nodes": [{
+								"author": {"login": "octocat"},
+								"bodyText": "an older comment",
+								"createdAt": "2026-07-28T10:00:00Z",
+								"updatedAt": "2026-07-28T10:00:00Z",
+								"url": "https://github.com/acme/rocket/issues/2#issuecomment-1"
+							}]
+						},
+						"timelineItems": {
+							"nodes": [{
+								"__typename": "LabeledEvent",
+								"actor": {"login": "maintainer"},
+								"createdAt": "2026-07-28T10:30:00Z",
+								"label": {"name": "priority: high", "color": "b60205"}
+							}]
+						}
+					},
+					{
+						"__typename": "Issue",
+						"id": "I_comment",
+						"url": "https://github.com/acme/rocket/issues/1",
+						"comments": {
+							"nodes": [{
+								"author": {"login": "reviewer"},
+								"bodyText": "  Please \n cover\t the retry case.  ",
+								"createdAt": "2026-07-28T10:10:00Z",
+								"updatedAt": "2026-07-28T10:20:00Z",
+								"url": "https://github.com/acme/rocket/issues/1#issuecomment-2"
+							}]
+						},
+						"timelineItems": {
+							"nodes": [{
+								"__typename": "UnlabeledEvent",
+								"actor": {"login": "maintainer"},
+								"createdAt": "2026-07-28T10:15:00Z",
+								"label": {"name": "blocked", "color": "d73a4a"}
+							}]
+						}
+					}
+				]
+			}
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewWithBaseURL(server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+	client.gate.interval = 0
+
+	results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{
+		{
+			NodeID:     "I_comment",
+			Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+			Number:     1,
+			Kind:       model.ItemKindIssue,
+			ETag:       `"unused-issue-etag"`,
+		},
+		{
+			NodeID:     "I_label",
+			Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+			Number:     2,
+			Kind:       model.ItemKindIssue,
+		},
+	})
+	if err != nil {
+		t.Fatalf("FetchLatestActivities() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("len(FetchLatestActivities()) = %d, want 2", len(results))
+	}
+	wantCommentTime := time.Date(2026, 7, 28, 10, 20, 0, 0, time.UTC)
+	wantComment := &model.Activity{
+		Kind:       "comment",
+		Actor:      "reviewer",
+		BodyText:   "Please cover the retry case.",
+		OccurredAt: wantCommentTime,
+		URL:        "https://github.com/acme/rocket/issues/1#issuecomment-2",
+	}
+	if results[0].Activity == nil || *results[0].Activity != *wantComment {
+		t.Fatalf("comment activity = %#v, want %#v", results[0].Activity, wantComment)
+	}
+	if results[0].ETag != `"unused-issue-etag"` {
+		t.Fatalf("issue ETag = %q, want input ETag", results[0].ETag)
+	}
+	wantLabelTime := time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC)
+	wantLabel := &model.Activity{
+		Kind:       "labeled",
+		Actor:      "maintainer",
+		BodyText:   "priority: high",
+		OccurredAt: wantLabelTime,
+		URL:        "https://github.com/acme/rocket/issues/2",
+	}
+	if results[1].Activity == nil || *results[1].Activity != *wantLabel {
+		t.Fatalf("label activity = %#v, want %#v", results[1].Activity, wantLabel)
+	}
+}
+
+func TestClientFetchLatestActivitiesNormalizesPullRequestReview(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		switch request.URL.Path {
+		case "/graphql":
+			var payload graphQLActivityRequest
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode GraphQL request: %v", err)
+			}
+			for _, fragment := range []string{
+				"PULL_REQUEST_REVIEW",
+				"REOPENED_EVENT",
+				"READY_FOR_REVIEW_EVENT",
+				"CONVERT_TO_DRAFT_EVENT",
+				"... on PullRequestReview",
+			} {
+				if !strings.Contains(payload.Query, fragment) {
+					t.Fatalf(
+						"GraphQL query = %q, want fragment %q",
+						payload.Query,
+						fragment,
+					)
+				}
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(response, `{
+				"data": {
+					"nodes": [{
+						"__typename": "PullRequest",
+						"id": "PR_rocket_7",
+						"url": "https://github.com/acme/rocket/pull/7",
+						"comments": {"nodes": []},
+						"timelineItems": {
+							"nodes": [{
+								"__typename": "PullRequestReview",
+								"author": {"login": "reviewer"},
+								"bodyText": "",
+								"state": "APPROVED",
+								"submittedAt": "2026-07-28T10:30:00Z",
+								"updatedAt": "2026-07-28T10:30:00Z",
+								"url": "https://github.com/acme/rocket/pull/7#pullrequestreview-42"
+							}]
+						}
+					}]
+				}
+			}`)
+		case "/repos/acme/rocket/pulls/7/comments":
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(response, "[]")
+		default:
+			t.Fatalf("request path = %q, want GraphQL or review comments", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithBaseURL(server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+	client.gate.interval = 0
+
+	results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		NodeID:     "PR_rocket_7",
+		Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:     7,
+		Kind:       model.ItemKindPullRequest,
+	}})
+	if err != nil {
+		t.Fatalf("FetchLatestActivities() error = %v", err)
+	}
+	want := &model.Activity{
+		Kind:       "review_approved",
+		Actor:      "reviewer",
+		OccurredAt: time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC),
+		URL:        "https://github.com/acme/rocket/pull/7#pullrequestreview-42",
+	}
+	if len(results) != 1 || results[0].Activity == nil ||
+		*results[0].Activity != *want {
+		t.Fatalf("review activity = %#v, want %#v", results, want)
+	}
+}
+
+func TestClientFetchLatestActivitiesBatchesGlobalNodeIDs(t *testing.T) {
+	t.Parallel()
+
+	batches := make([][]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		var payload graphQLActivityRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode GraphQL request: %v", err)
+		}
+		if len(payload.Variables.IDs) > 50 {
+			t.Fatalf("GraphQL batch size = %d, want at most 50", len(payload.Variables.IDs))
+		}
+		batches = append(batches, slices.Clone(payload.Variables.IDs))
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(response, `{"data":{"nodes":[]}}`)
+	}))
+	defer server.Close()
+
+	client, err := NewWithBaseURL(server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+	client.gate.interval = 0
+
+	targets := make([]model.ActivityTarget, 0, 51)
+	for index := range 51 {
+		targets = append(targets, model.ActivityTarget{
+			NodeID: "I_" + strconv.Itoa(index),
+			Repository: model.Repository{
+				Host:  "github.com",
+				Owner: "acme",
+				Name:  "rocket",
+			},
+			Number: index + 1,
+			Kind:   model.ItemKindIssue,
+		})
+	}
+	results, err := client.FetchLatestActivities(t.Context(), targets)
+	if err != nil {
+		t.Fatalf("FetchLatestActivities() error = %v", err)
+	}
+	if len(results) != len(targets) {
+		t.Fatalf("result count = %d, want %d", len(results), len(targets))
+	}
+	if len(batches) != 2 {
+		t.Fatalf("GraphQL batch count = %d, want 2", len(batches))
+	}
+	if len(batches[0]) != 50 || len(batches[1]) != 1 {
+		t.Fatalf("GraphQL batch sizes = [%d %d], want [50 1]", len(batches[0]), len(batches[1]))
+	}
+	if batches[0][0] != "I_0" || batches[0][49] != "I_49" ||
+		batches[1][0] != "I_50" {
+		t.Fatalf("GraphQL batches = %q, want stable input order", batches)
+	}
+}
+
+func TestClientFetchLatestActivitiesRejectsEmptyNodeID(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewWithBaseURL(
+		&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("GitHub request sent for empty node ID")
+			return nil, nil
+		})},
+		"https://api.example.test",
+	)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+
+	_, err = client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:     1,
+		Kind:       model.ItemKindIssue,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "node id is required") {
+		t.Fatalf("FetchLatestActivities() error = %v, want missing node ID", err)
+	}
+}
+
+func TestClientFetchLatestActivitiesPreservesGraphQLRateLimit(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewWithBaseURL(
+		&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return jsonResponse(
+				http.StatusOK,
+				`{"data":{"nodes":[]},"errors":[{"message":"API rate limit exceeded"}]}`,
+				http.Header{"Retry-After": {"30"}},
+			), nil
+		})},
+		"https://api.example.test",
+	)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+	client.gate.interval = 0
+
+	_, err = client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		NodeID:     "I_rocket_1",
+		Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:     1,
+		Kind:       model.ItemKindIssue,
+	}})
+	var rateLimit *RateLimitError
+	if !errors.As(err, &rateLimit) {
+		t.Fatalf("FetchLatestActivities() error = %T, want *RateLimitError", err)
+	}
+}
+
+func TestClientFetchLatestActivitiesTruncatesUnicodeBodyTo160Runes(t *testing.T) {
+	t.Parallel()
+
+	longBody := strings.Repeat("界", 170)
+	encodedBody, err := json.Marshal(longBody)
+	if err != nil {
+		t.Fatalf("encode comment body: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(
+			response,
+			`{"data":{"nodes":[{
+				"__typename":"Issue",
+				"id":"I_long",
+				"url":"https://github.com/acme/rocket/issues/1",
+				"comments":{"nodes":[{
+					"author":{"login":"reviewer"},
+					"bodyText":`+string(encodedBody)+`,
+					"createdAt":"2026-07-28T10:00:00Z",
+					"updatedAt":"2026-07-28T10:00:00Z",
+					"url":"https://github.com/acme/rocket/issues/1#issuecomment-1"
+				}]},
+				"timelineItems":{"nodes":[]}
+			}]}}`,
+		)
+	}))
+	defer server.Close()
+
+	client, err := NewWithBaseURL(server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+	client.gate.interval = 0
+
+	results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		NodeID:     "I_long",
+		Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:     1,
+		Kind:       model.ItemKindIssue,
+	}})
+	if err != nil {
+		t.Fatalf("FetchLatestActivities() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Activity == nil {
+		t.Fatalf("activity results = %#v, want one activity", results)
+	}
+	want := strings.Repeat("界", 159) + "…"
+	if results[0].Activity.BodyText != want {
+		t.Fatalf(
+			"activity body = %q (%d runes), want %q (%d runes)",
+			results[0].Activity.BodyText,
+			len([]rune(results[0].Activity.BodyText)),
+			want,
+			len([]rune(want)),
+		)
+	}
+}
+
+func TestClientFetchLatestActivitiesUsesNewestInlineReviewComment(t *testing.T) {
+	t.Parallel()
+
+	var reviewCommentRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		switch request.URL.Path {
+		case "/graphql":
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(response, `{"data":{"nodes":[{
+				"__typename":"PullRequest",
+				"id":"PR_rocket_7",
+				"url":"https://github.com/acme/rocket/pull/7",
+				"comments":{"nodes":[{
+					"author":{"login":"octocat"},
+					"bodyText":"conversation comment",
+					"createdAt":"2026-07-28T10:00:00Z",
+					"updatedAt":"2026-07-28T10:00:00Z",
+					"url":"https://github.com/acme/rocket/pull/7#issuecomment-1"
+				}]},
+				"timelineItems":{"nodes":[]}
+			}]}}`)
+		case "/repos/acme/rocket/pulls/7/comments":
+			if request.Method != http.MethodGet {
+				t.Fatalf("review comment method = %q, want GET", request.Method)
+			}
+			wantQuery := "direction=desc&per_page=1&sort=updated"
+			if request.URL.RawQuery != wantQuery {
+				t.Fatalf("review comment query = %q, want %q", request.URL.RawQuery, wantQuery)
+			}
+			if request.Header.Get("If-None-Match") != `"inline-v1"` {
+				t.Fatalf(
+					"If-None-Match = %q, want inline-v1",
+					request.Header.Get("If-None-Match"),
+				)
+			}
+			if count := reviewCommentRequests.Add(1); count > 1 {
+				t.Fatalf("review comment request count = %d, want 1", count)
+			}
+			response.Header().Set("Content-Type", "application/json")
+			response.Header().Set("ETag", `"inline-v2"`)
+			response.Header().Set(
+				"Link",
+				"<http://"+request.Host+
+					"/repos/acme/rocket/pulls/7/comments?page=2>; rel=\"next\"",
+			)
+			_, _ = io.WriteString(response, `[{
+				"user":{"login":"reviewer"},
+				"body_text":"  Please\nrename\tthis value. ",
+				"created_at":"2026-07-28T10:20:00Z",
+				"updated_at":"2026-07-28T10:30:00Z",
+				"html_url":"https://github.com/acme/rocket/pull/7#discussion_r42"
+			}]`)
+		default:
+			t.Fatalf("request path = %q, want GraphQL or review comments", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithBaseURL(server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+	client.gate.interval = 0
+
+	results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		NodeID:     "PR_rocket_7",
+		Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:     7,
+		Kind:       model.ItemKindPullRequest,
+		ETag:       `"inline-v1"`,
+	}})
+	if err != nil {
+		t.Fatalf("FetchLatestActivities() error = %v", err)
+	}
+	want := &model.Activity{
+		Kind:       "review_comment",
+		Actor:      "reviewer",
+		BodyText:   "Please rename this value.",
+		OccurredAt: time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC),
+		URL:        "https://github.com/acme/rocket/pull/7#discussion_r42",
+	}
+	if len(results) != 1 || results[0].Activity == nil ||
+		*results[0].Activity != *want {
+		t.Fatalf("latest activity = %#v, want %#v", results, want)
+	}
+	if results[0].ETag != `"inline-v2"` {
+		t.Fatalf("activity ETag = %q, want inline-v2", results[0].ETag)
+	}
+	if reviewCommentRequests.Load() != 1 {
+		t.Fatalf(
+			"review comment request count = %d, want 1",
+			reviewCommentRequests.Load(),
+		)
+	}
+}
+
+func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.T) {
+	t.Parallel()
+
+	graphActivity := &model.Activity{
+		Kind:       "comment",
+		Actor:      "octocat",
+		BodyText:   "new conversation comment",
+		OccurredAt: time.Date(2026, 7, 28, 10, 20, 0, 0, time.UTC),
+		URL:        "https://github.com/acme/rocket/pull/7#issuecomment-2",
+	}
+	tests := []struct {
+		name     string
+		current  *model.Activity
+		expected *model.Activity
+	}{
+		{
+			name: "cached inline comment",
+			current: &model.Activity{
+				Kind:       "review_comment",
+				Actor:      "reviewer",
+				BodyText:   "cached inline comment",
+				OccurredAt: time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC),
+				URL:        "https://github.com/acme/rocket/pull/7#discussion_r42",
+			},
+			expected: &model.Activity{
+				Kind:       "review_comment",
+				Actor:      "reviewer",
+				BodyText:   "cached inline comment",
+				OccurredAt: time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC),
+				URL:        "https://github.com/acme/rocket/pull/7#discussion_r42",
+			},
+		},
+		{
+			name: "cached non-inline activity",
+			current: &model.Activity{
+				Kind:       "comment",
+				Actor:      "someone",
+				BodyText:   "stale cached activity",
+				OccurredAt: time.Date(2026, 7, 28, 10, 40, 0, 0, time.UTC),
+				URL:        "https://github.com/acme/rocket/pull/7#issuecomment-1",
+			},
+			expected: graphActivity,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(
+				response http.ResponseWriter,
+				request *http.Request,
+			) {
+				switch request.URL.Path {
+				case "/graphql":
+					response.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(response, `{"data":{"nodes":[{
+						"__typename":"PullRequest",
+						"id":"PR_rocket_7",
+						"url":"https://github.com/acme/rocket/pull/7",
+						"comments":{"nodes":[{
+							"author":{"login":"octocat"},
+							"bodyText":"new conversation comment",
+							"createdAt":"2026-07-28T10:20:00Z",
+							"updatedAt":"2026-07-28T10:20:00Z",
+							"url":"https://github.com/acme/rocket/pull/7#issuecomment-2"
+						}]},
+						"timelineItems":{"nodes":[]}
+					}]}}`)
+				case "/repos/acme/rocket/pulls/7/comments":
+					if request.Header.Get("If-None-Match") != `"inline-v1"` {
+						t.Fatalf(
+							"If-None-Match = %q, want inline-v1",
+							request.Header.Get("If-None-Match"),
+						)
+					}
+					response.Header().Set("ETag", `"inline-v1"`)
+					response.WriteHeader(http.StatusNotModified)
+				default:
+					t.Fatalf("request path = %q, want GraphQL or review comments", request.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			client, err := NewWithBaseURL(server.Client(), server.URL)
+			if err != nil {
+				t.Fatalf("NewWithBaseURL() error = %v", err)
+			}
+			client.gate.interval = 0
+
+			results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+				NodeID:         "PR_rocket_7",
+				Repository:     model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+				Number:         7,
+				Kind:           model.ItemKindPullRequest,
+				LatestActivity: test.current,
+				ETag:           `"inline-v1"`,
+			}})
+			if err != nil {
+				t.Fatalf("FetchLatestActivities() error = %v", err)
+			}
+			if len(results) != 1 || results[0].Activity == nil ||
+				*results[0].Activity != *test.expected {
+				t.Fatalf("latest activity = %#v, want %#v", results, test.expected)
+			}
+			if results[0].ETag != `"inline-v1"` {
+				t.Fatalf("activity ETag = %q, want inline-v1", results[0].ETag)
+			}
+		})
 	}
 }
 

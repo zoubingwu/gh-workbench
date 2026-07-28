@@ -19,11 +19,13 @@ import (
 )
 
 const (
-	githubAPIVersion = "2022-11-28"
-	maxErrorBody     = 4 << 10
-	pageSize         = 100
-	maxSearchPages   = 10
-	requestInterval  = time.Second
+	githubAPIVersion  = "2022-11-28"
+	maxErrorBody      = 4 << 10
+	pageSize          = 100
+	maxSearchPages    = 10
+	activityBatchSize = 50
+	maxActivityRunes  = 160
+	requestInterval   = time.Second
 )
 
 type Client struct {
@@ -333,6 +335,7 @@ func (c *Client) searchOpenItems(
 				})
 			}
 			items = append(items, model.WorkItem{
+				NodeID:         node.ID,
 				Repository:     repository.FullName(),
 				RepositoryKey:  repository.Key(),
 				Number:         node.Number,
@@ -419,20 +422,8 @@ func (c *Client) fetchSearchPage(
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 		return graphQLSearchResponse{}, fmt.Errorf("decode GitHub search response: %w", err)
 	}
-	if len(result.Errors) > 0 {
-		messages := make([]string, 0, len(result.Errors))
-		for _, graphQLError := range result.Errors {
-			messages = append(messages, graphQLError.Message)
-		}
-		message := strings.Join(messages, "; ")
-		if retryAt, limited := rateLimitRetry(response, message); limited {
-			return graphQLSearchResponse{}, &RateLimitError{
-				Status:  response.Status,
-				Message: message,
-				Retry:   retryAt,
-			}
-		}
-		return graphQLSearchResponse{}, fmt.Errorf("GitHub GraphQL API returned errors: %s", message)
+	if err := graphQLResponseError(response, result.Errors); err != nil {
+		return graphQLSearchResponse{}, err
 	}
 	return result, nil
 }
@@ -485,6 +476,349 @@ func (c *Client) FetchReactions(
 		})
 	}
 	return model.ReactionsResult{Reactions: reactions, ETag: responseETag}, nil
+}
+
+func (c *Client) FetchLatestActivities(
+	ctx context.Context,
+	targets []model.ActivityTarget,
+) ([]model.ActivityResult, error) {
+	ids := make([]string, 0, len(targets))
+	for index, target := range targets {
+		if strings.TrimSpace(target.NodeID) == "" {
+			return nil, fmt.Errorf(
+				"fetch GitHub activities: node id is required for target %d",
+				index,
+			)
+		}
+		ids = append(ids, target.NodeID)
+	}
+	activities := make(map[string]*model.Activity, len(targets))
+	for start := 0; start < len(ids); start += activityBatchSize {
+		end := min(start+activityBatchSize, len(ids))
+		batch, err := c.fetchActivityBatch(ctx, ids[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("fetch GitHub activity batch: %w", err)
+		}
+		for id, activity := range batch {
+			activities[id] = activity
+		}
+	}
+
+	results := make([]model.ActivityResult, 0, len(targets))
+	for _, target := range targets {
+		activity := activities[target.NodeID]
+		etag := target.ETag
+		if target.Kind == model.ItemKindPullRequest {
+			inline, responseETag, unchanged, err := c.fetchLatestReviewComment(
+				ctx,
+				target.Repository,
+				target.Number,
+				target.ETag,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"fetch inline review activity for pull request %d: %w",
+					target.Number,
+					err,
+				)
+			}
+			etag = responseETag
+			if unchanged && target.LatestActivity != nil &&
+				target.LatestActivity.Kind == "review_comment" {
+				inline = target.LatestActivity
+			}
+			activity = laterActivity(activity, inline)
+		}
+		results = append(results, model.ActivityResult{
+			Activity: activity,
+			ETag:     etag,
+		})
+	}
+	return results, nil
+}
+
+func (c *Client) fetchLatestReviewComment(
+	ctx context.Context,
+	repository model.Repository,
+	number int,
+	etag string,
+) (*model.Activity, string, bool, error) {
+	endpoint, err := c.endpoint(
+		"repos",
+		repository.Owner,
+		repository.Name,
+		"pulls",
+		strconv.Itoa(number),
+		"comments",
+	)
+	if err != nil {
+		return nil, etag, false, err
+	}
+	query := endpoint.Query()
+	query.Set("sort", "updated")
+	query.Set("direction", "desc")
+	query.Set("per_page", "1")
+	endpoint.RawQuery = query.Encode()
+
+	comments, responseETag, unchanged, err := fetchConditionalPage[reviewCommentResponse](
+		ctx,
+		c,
+		endpoint,
+		etag,
+	)
+	if err != nil {
+		return nil, responseETag, false, fmt.Errorf(
+			"fetch GitHub review comments: %w",
+			err,
+		)
+	}
+	if unchanged {
+		return nil, responseETag, true, nil
+	}
+	if len(comments) == 0 {
+		return nil, responseETag, false, nil
+	}
+	comment := comments[0]
+	occurredAt := comment.UpdatedAt
+	if occurredAt.IsZero() {
+		occurredAt = comment.CreatedAt
+	}
+	bodyText := comment.BodyText
+	if bodyText == "" {
+		bodyText = comment.Body
+	}
+	return &model.Activity{
+		Kind:       "review_comment",
+		Actor:      login(comment.User),
+		BodyText:   normalizeActivityBody(bodyText),
+		OccurredAt: occurredAt,
+		URL:        comment.HTMLURL,
+	}, responseETag, false, nil
+}
+
+func fetchConditionalPage[T any](
+	ctx context.Context,
+	client *Client,
+	endpoint *url.URL,
+	etag string,
+) ([]T, string, bool, error) {
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		endpoint.String(),
+		nil,
+	)
+	if err != nil {
+		return nil, etag, false, fmt.Errorf("create GitHub request: %w", err)
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
+	request.Header.Set("User-Agent", "gh-workbench")
+	if etag != "" {
+		request.Header.Set("If-None-Match", etag)
+	}
+
+	response, err := client.do(request)
+	if err != nil {
+		return nil, etag, false, fmt.Errorf("send GitHub request: %w", err)
+	}
+	responseETag := etag
+	if currentETag := response.Header.Get("ETag"); currentETag != "" {
+		responseETag = currentETag
+	}
+	if response.StatusCode == http.StatusNotModified {
+		_ = response.Body.Close()
+		return nil, responseETag, true, nil
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		err := responseError(response)
+		_ = response.Body.Close()
+		return nil, responseETag, false, err
+	}
+
+	values := make([]T, 0)
+	if err := json.NewDecoder(response.Body).Decode(&values); err != nil {
+		_ = response.Body.Close()
+		return nil, responseETag, false, fmt.Errorf("decode GitHub response: %w", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		return nil, responseETag, false, fmt.Errorf("close GitHub response: %w", err)
+	}
+	return values, responseETag, false, nil
+}
+
+func (c *Client) fetchActivityBatch(
+	ctx context.Context,
+	ids []string,
+) (map[string]*model.Activity, error) {
+	body, err := json.Marshal(graphQLActivityRequest{
+		Query: latestActivitiesQuery,
+		Variables: graphQLActivityVariables{
+			IDs: ids,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode GitHub activity request: %w", err)
+	}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.graphqlURL.String(),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create GitHub activity request: %w", err)
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
+	request.Header.Set("User-Agent", "gh-workbench")
+
+	response, err := c.do(request)
+	if err != nil {
+		return nil, fmt.Errorf("send GitHub activity request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, responseError(response)
+	}
+
+	var result graphQLActivityResponse
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode GitHub activity response: %w", err)
+	}
+	if err := graphQLResponseError(response, result.Errors); err != nil {
+		return nil, err
+	}
+
+	activities := make(map[string]*model.Activity, len(result.Data.Nodes))
+	for _, node := range result.Data.Nodes {
+		if node == nil || node.ID == "" {
+			continue
+		}
+		activities[node.ID] = latestGraphQLActivity(node)
+	}
+	return activities, nil
+}
+
+func latestGraphQLActivity(node *graphQLActivityNode) *model.Activity {
+	var latest *model.Activity
+	for _, comment := range node.Comments.Nodes {
+		occurredAt := comment.UpdatedAt
+		if occurredAt.IsZero() {
+			occurredAt = comment.CreatedAt
+		}
+		latest = laterActivity(latest, &model.Activity{
+			Kind:       "comment",
+			Actor:      login(comment.Author),
+			BodyText:   normalizeActivityBody(comment.BodyText),
+			OccurredAt: occurredAt,
+			URL:        comment.URL,
+		})
+	}
+	for _, event := range node.TimelineItems.Nodes {
+		var activity *model.Activity
+		switch event.TypeName {
+		case "LabeledEvent":
+			activity = &model.Activity{
+				Kind:       "labeled",
+				Actor:      login(event.Actor),
+				BodyText:   event.Label.Name,
+				OccurredAt: event.CreatedAt,
+				URL:        node.URL,
+			}
+		case "UnlabeledEvent":
+			activity = &model.Activity{
+				Kind:       "unlabeled",
+				Actor:      login(event.Actor),
+				BodyText:   event.Label.Name,
+				OccurredAt: event.CreatedAt,
+				URL:        node.URL,
+			}
+		case "PullRequestReview":
+			occurredAt := event.UpdatedAt
+			if occurredAt.IsZero() {
+				occurredAt = event.SubmittedAt
+			}
+			kind := "review"
+			if state := normalizeGraphQLEnum(event.State); state != "" {
+				kind += "_" + state
+			}
+			activity = &model.Activity{
+				Kind:       kind,
+				Actor:      login(event.Author),
+				BodyText:   normalizeActivityBody(event.BodyText),
+				OccurredAt: occurredAt,
+				URL:        event.URL,
+			}
+		case "ReopenedEvent":
+			activity = timelineStateActivity("reopened", node.URL, event)
+		case "ReviewRequestedEvent":
+			activity = timelineStateActivity("review_requested", node.URL, event)
+		case "ReviewRequestRemovedEvent":
+			activity = timelineStateActivity("review_request_removed", node.URL, event)
+		case "ReadyForReviewEvent":
+			activity = timelineStateActivity("ready_for_review", node.URL, event)
+		case "ConvertToDraftEvent":
+			activity = timelineStateActivity("converted_to_draft", node.URL, event)
+		}
+		latest = laterActivity(latest, activity)
+	}
+	return latest
+}
+
+func timelineStateActivity(
+	kind string,
+	url string,
+	event graphQLTimelineEvent,
+) *model.Activity {
+	return &model.Activity{
+		Kind:       kind,
+		Actor:      login(event.Actor),
+		OccurredAt: event.CreatedAt,
+		URL:        url,
+	}
+}
+
+func laterActivity(current, candidate *model.Activity) *model.Activity {
+	if candidate == nil {
+		return current
+	}
+	if current == nil || candidate.OccurredAt.After(current.OccurredAt) {
+		return candidate
+	}
+	return current
+}
+
+func normalizeActivityBody(body string) string {
+	normalized := strings.Join(strings.Fields(body), " ")
+	runes := []rune(normalized)
+	if len(runes) <= maxActivityRunes {
+		return normalized
+	}
+	return string(runes[:maxActivityRunes-1]) + "…"
+}
+
+func graphQLResponseError(
+	response *http.Response,
+	graphQLErrors []graphQLError,
+) error {
+	if len(graphQLErrors) == 0 {
+		return nil
+	}
+	messages := make([]string, 0, len(graphQLErrors))
+	for _, graphQLError := range graphQLErrors {
+		messages = append(messages, graphQLError.Message)
+	}
+	message := strings.Join(messages, "; ")
+	if retryAt, limited := rateLimitRetry(response, message); limited {
+		return &RateLimitError{
+			Status:  response.Status,
+			Message: message,
+			Retry:   retryAt,
+		}
+	}
+	return fmt.Errorf("GitHub GraphQL API returned errors: %s", message)
 }
 
 func (c *Client) endpoint(parts ...string) (*url.URL, error) {
@@ -689,6 +1023,7 @@ query RelevantOpenItems($query: String!, $after: String) {
     nodes {
       __typename
       ... on Issue {
+        id
         number
         title
         url
@@ -709,6 +1044,7 @@ query RelevantOpenItems($query: String!, $after: String) {
         }
       }
       ... on PullRequest {
+        id
         number
         title
         url
@@ -731,6 +1067,148 @@ query RelevantOpenItems($query: String!, $after: String) {
   }
 }`
 
+const latestActivitiesQuery = `
+query LatestActivities($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    __typename
+    ... on Issue {
+      id
+      url
+      comments(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes {
+          author {
+            login
+          }
+          bodyText
+          createdAt
+          updatedAt
+          url
+        }
+      }
+      timelineItems(last: 1, itemTypes: [
+        LABELED_EVENT
+        UNLABELED_EVENT
+        REOPENED_EVENT
+      ]) {
+        nodes {
+          __typename
+          ... on LabeledEvent {
+            actor {
+              login
+            }
+            createdAt
+            label {
+              name
+            }
+          }
+          ... on UnlabeledEvent {
+            actor {
+              login
+            }
+            createdAt
+            label {
+              name
+            }
+          }
+          ... on ReopenedEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+        }
+      }
+    }
+    ... on PullRequest {
+      id
+      url
+      comments(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes {
+          author {
+            login
+          }
+          bodyText
+          createdAt
+          updatedAt
+          url
+        }
+      }
+      timelineItems(last: 1, itemTypes: [
+        PULL_REQUEST_REVIEW
+        LABELED_EVENT
+        UNLABELED_EVENT
+        REOPENED_EVENT
+        REVIEW_REQUESTED_EVENT
+        REVIEW_REQUEST_REMOVED_EVENT
+        READY_FOR_REVIEW_EVENT
+        CONVERT_TO_DRAFT_EVENT
+      ]) {
+        nodes {
+          __typename
+          ... on PullRequestReview {
+            author {
+              login
+            }
+            bodyText
+            state
+            submittedAt
+            updatedAt
+            url
+          }
+          ... on LabeledEvent {
+            actor {
+              login
+            }
+            createdAt
+            label {
+              name
+            }
+          }
+          ... on UnlabeledEvent {
+            actor {
+              login
+            }
+            createdAt
+            label {
+              name
+            }
+          }
+          ... on ReopenedEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+          ... on ReviewRequestedEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+          ... on ReviewRequestRemovedEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+          ... on ReadyForReviewEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+          ... on ConvertToDraftEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+        }
+      }
+    }
+  }
+}`
+
 type graphQLRequest struct {
 	Query     string           `json:"query"`
 	Variables graphQLVariables `json:"variables"`
@@ -739,6 +1217,15 @@ type graphQLRequest struct {
 type graphQLVariables struct {
 	Query string  `json:"query"`
 	After *string `json:"after"`
+}
+
+type graphQLActivityRequest struct {
+	Query     string                   `json:"query"`
+	Variables graphQLActivityVariables `json:"variables"`
+}
+
+type graphQLActivityVariables struct {
+	IDs []string `json:"ids"`
 }
 
 type graphQLSearchResponse struct {
@@ -755,8 +1242,49 @@ type graphQLSearchResponse struct {
 	Errors []graphQLError `json:"errors"`
 }
 
+type graphQLActivityResponse struct {
+	Data struct {
+		Nodes []*graphQLActivityNode `json:"nodes"`
+	} `json:"data"`
+	Errors []graphQLError `json:"errors"`
+}
+
+type graphQLActivityNode struct {
+	TypeName string `json:"__typename"`
+	ID       string `json:"id"`
+	URL      string `json:"url"`
+	Comments struct {
+		Nodes []graphQLComment `json:"nodes"`
+	} `json:"comments"`
+	TimelineItems struct {
+		Nodes []graphQLTimelineEvent `json:"nodes"`
+	} `json:"timelineItems"`
+}
+
+type graphQLComment struct {
+	Author    *userResponse `json:"author"`
+	BodyText  string        `json:"bodyText"`
+	CreatedAt time.Time     `json:"createdAt"`
+	UpdatedAt time.Time     `json:"updatedAt"`
+	URL       string        `json:"url"`
+}
+
+type graphQLTimelineEvent struct {
+	TypeName    string        `json:"__typename"`
+	Actor       *userResponse `json:"actor"`
+	Author      *userResponse `json:"author"`
+	BodyText    string        `json:"bodyText"`
+	State       string        `json:"state"`
+	CreatedAt   time.Time     `json:"createdAt"`
+	SubmittedAt time.Time     `json:"submittedAt"`
+	UpdatedAt   time.Time     `json:"updatedAt"`
+	URL         string        `json:"url"`
+	Label       labelResponse `json:"label"`
+}
+
 type graphQLSearchNode struct {
 	TypeName         string        `json:"__typename"`
+	ID               string        `json:"id"`
 	Number           int           `json:"number"`
 	Title            string        `json:"title"`
 	URL              string        `json:"url"`
@@ -795,6 +1323,15 @@ type reactionResponse struct {
 	Content   string        `json:"content"`
 	User      *userResponse `json:"user"`
 	CreatedAt time.Time     `json:"created_at"`
+}
+
+type reviewCommentResponse struct {
+	User      *userResponse `json:"user"`
+	Body      string        `json:"body"`
+	BodyText  string        `json:"body_text"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	HTMLURL   string        `json:"html_url"`
 }
 
 func login(user *userResponse) string {
