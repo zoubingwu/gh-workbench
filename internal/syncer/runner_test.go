@@ -305,8 +305,9 @@ func (f *fakeSource) FetchLatestActivities(
 	results := make([]model.ActivityResult, 0, len(targets))
 	for _, target := range targets {
 		results = append(results, model.ActivityResult{
-			Activity: f.activities[target.NodeID],
-			ETag:     target.ETag,
+			Activity:            f.activities[target.NodeID],
+			LatestReviewComment: target.LatestReviewComment,
+			ETag:                target.ETag,
 		})
 	}
 	return results, nil

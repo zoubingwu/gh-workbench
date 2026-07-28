@@ -1010,9 +1010,9 @@ func TestClientFetchLatestActivitiesUsesNewestInlineReviewComment(t *testing.T) 
 			if request.URL.RawQuery != wantQuery {
 				t.Fatalf("review comment query = %q, want %q", request.URL.RawQuery, wantQuery)
 			}
-			if request.Header.Get("If-None-Match") != "" {
+			if request.Header.Get("If-None-Match") != `"inline-v1"` {
 				t.Fatalf(
-					"If-None-Match = %q, want empty without a cached inline comment",
+					"If-None-Match = %q, want inline-v1",
 					request.Header.Get("If-None-Match"),
 				)
 			}
@@ -1046,11 +1046,12 @@ func TestClientFetchLatestActivitiesUsesNewestInlineReviewComment(t *testing.T) 
 	client.gate.interval = 0
 
 	results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
-		NodeID:     "PR_rocket_7",
-		Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
-		Number:     7,
-		Kind:       model.ItemKindPullRequest,
-		ETag:       `"inline-v1"`,
+		NodeID:              "PR_rocket_7",
+		Repository:          model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:              7,
+		Kind:                model.ItemKindPullRequest,
+		LatestReviewComment: &model.Activity{Kind: "review_comment"},
+		ETag:                `"inline-v1"`,
 	}})
 	if err != nil {
 		t.Fatalf("FetchLatestActivities() error = %v", err)
@@ -1069,6 +1070,14 @@ func TestClientFetchLatestActivitiesUsesNewestInlineReviewComment(t *testing.T) 
 	if results[0].ETag != `"inline-v2"` {
 		t.Fatalf("activity ETag = %q, want inline-v2", results[0].ETag)
 	}
+	if results[0].LatestReviewComment == nil ||
+		*results[0].LatestReviewComment != *want {
+		t.Fatalf(
+			"latest review comment = %#v, want %#v",
+			results[0].LatestReviewComment,
+			want,
+		)
+	}
 	if reviewCommentRequests.Load() != 1 {
 		t.Fatalf(
 			"review comment request count = %d, want 1",
@@ -1083,10 +1092,9 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 	tests := []struct {
 		name            string
 		current         *model.Activity
+		reviewComment   *model.Activity
 		expected        *model.Activity
 		wantRequestETag string
-		reviewComment   string
-		responseStatus  int
 	}{
 		{
 			name: "cached inline comment",
@@ -1104,11 +1112,17 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 				OccurredAt: time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC),
 				URL:        "https://github.com/acme/rocket/pull/7#discussion_r42",
 			},
+			reviewComment: &model.Activity{
+				Kind:       "review_comment",
+				Actor:      "reviewer",
+				BodyText:   "cached inline comment",
+				OccurredAt: time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC),
+				URL:        "https://github.com/acme/rocket/pull/7#discussion_r42",
+			},
 			wantRequestETag: `"inline-v1"`,
-			responseStatus:  http.StatusNotModified,
 		},
 		{
-			name: "refetches when cached activity is not an inline comment",
+			name: "reuses inline candidate when another activity previously won",
 			current: &model.Activity{
 				Kind:       "comment",
 				Actor:      "someone",
@@ -1123,14 +1137,14 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 				OccurredAt: time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC),
 				URL:        "https://github.com/acme/rocket/pull/7#discussion_r43",
 			},
-			reviewComment: `[{
-				"user":{"login":"reviewer"},
-				"body_text":"new inline comment",
-				"created_at":"2026-07-28T10:30:00Z",
-				"updated_at":"2026-07-28T10:30:00Z",
-				"html_url":"https://github.com/acme/rocket/pull/7#discussion_r43"
-			}]`,
-			responseStatus: http.StatusOK,
+			reviewComment: &model.Activity{
+				Kind:       "review_comment",
+				Actor:      "reviewer",
+				BodyText:   "new inline comment",
+				OccurredAt: time.Date(2026, 7, 28, 10, 30, 0, 0, time.UTC),
+				URL:        "https://github.com/acme/rocket/pull/7#discussion_r43",
+			},
+			wantRequestETag: `"inline-v1"`,
 		},
 	}
 	for _, test := range tests {
@@ -1167,10 +1181,7 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 						)
 					}
 					response.Header().Set("ETag", `"inline-v1"`)
-					response.WriteHeader(test.responseStatus)
-					if test.reviewComment != "" {
-						_, _ = io.WriteString(response, test.reviewComment)
-					}
+					response.WriteHeader(http.StatusNotModified)
 				default:
 					t.Fatalf("request path = %q, want GraphQL or review comments", request.URL.Path)
 				}
@@ -1184,12 +1195,13 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 			client.gate.interval = 0
 
 			results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
-				NodeID:         "PR_rocket_7",
-				Repository:     model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
-				Number:         7,
-				Kind:           model.ItemKindPullRequest,
-				LatestActivity: test.current,
-				ETag:           `"inline-v1"`,
+				NodeID:              "PR_rocket_7",
+				Repository:          model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+				Number:              7,
+				Kind:                model.ItemKindPullRequest,
+				LatestActivity:      test.current,
+				LatestReviewComment: test.reviewComment,
+				ETag:                `"inline-v1"`,
 			}})
 			if err != nil {
 				t.Fatalf("FetchLatestActivities() error = %v", err)
@@ -1200,6 +1212,14 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 			}
 			if results[0].ETag != `"inline-v1"` {
 				t.Fatalf("activity ETag = %q, want inline-v1", results[0].ETag)
+			}
+			if results[0].LatestReviewComment == nil ||
+				*results[0].LatestReviewComment != *test.reviewComment {
+				t.Fatalf(
+					"latest review comment = %#v, want %#v",
+					results[0].LatestReviewComment,
+					test.reviewComment,
+				)
 			}
 		})
 	}

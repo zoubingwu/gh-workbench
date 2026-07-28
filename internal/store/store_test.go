@@ -344,9 +344,9 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 		NodeID:        "I_kwDOExample",
 		RepositoryKey: "github.com/acme/api",
 		Number:        12,
-		Kind:          model.ItemKindIssue,
+		Kind:          model.ItemKindPullRequest,
 		Title:         "Track API errors",
-		URL:           "https://github.com/acme/api/issues/12",
+		URL:           "https://github.com/acme/api/pull/12",
 		State:         "open",
 		Author:        "octocat",
 		CreatedAt:     now.Add(-time.Hour),
@@ -384,7 +384,14 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 		Actor:      "reviewer",
 		BodyText:   "Please cover the retry case.",
 		OccurredAt: now.Add(-time.Minute),
-		URL:        "https://github.com/acme/api/issues/12#issuecomment-1",
+		URL:        "https://github.com/acme/api/pull/12#issuecomment-1",
+	}
+	reviewComment := &model.Activity{
+		Kind:       "review_comment",
+		Actor:      "reviewer",
+		BodyText:   "Please rename this value.",
+		OccurredAt: now.Add(-2 * time.Minute),
+		URL:        "https://github.com/acme/api/pull/12#discussion_r1",
 	}
 	changed, applied, err := database.ReplaceActivity(
 		ctx,
@@ -392,6 +399,7 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 		item.Number,
 		activityResource.Revision,
 		activity,
+		reviewComment,
 	)
 	if err != nil {
 		t.Fatalf("ReplaceActivity() error = %v", err)
@@ -430,6 +438,25 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 			activity,
 		)
 	}
+	due, err = database.ListDueResources(ctx, host, now.Add(time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListDueResources() after refresh error = %v", err)
+	}
+	for _, resource := range due {
+		if resource.Kind != model.ResourceKindActivity {
+			continue
+		}
+		if resource.LatestReviewComment == nil ||
+			*resource.LatestReviewComment != *reviewComment {
+			t.Fatalf(
+				"LatestReviewComment = %#v, want %#v",
+				resource.LatestReviewComment,
+				reviewComment,
+			)
+		}
+		return
+	}
+	t.Fatal("activity resource missing after discovery refresh")
 }
 
 func TestStoreRejectsClosedSearchResult(t *testing.T) {
@@ -869,6 +896,7 @@ func TestStaleActivityPollDoesNotOverwriteHotReset(t *testing.T) {
 		item.Number,
 		stale.Revision,
 		initial,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("seed activity error: %v", err)
@@ -899,6 +927,7 @@ func TestStaleActivityPollDoesNotOverwriteHotReset(t *testing.T) {
 		item.Number,
 		stale.Revision,
 		staleActivity,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("stale activity replacement error: %v", err)
@@ -950,6 +979,45 @@ func TestOpenMigratesWorkItemColumns(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("create legacy work_items: %v", err)
 	}
+	if _, err := raw.Exec(`
+		CREATE TABLE poll_resources (
+			resource_key TEXT PRIMARY KEY,
+			repository TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			number INTEGER NOT NULL DEFAULT 0,
+			etag TEXT NOT NULL DEFAULT '',
+			interval_ns INTEGER NOT NULL,
+			next_poll_at INTEGER NOT NULL,
+			last_poll_at INTEGER,
+			last_success_at INTEGER,
+			last_changed_at INTEGER,
+			resource_updated_at INTEGER NOT NULL,
+			unchanged_count INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			revision INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO poll_resources (
+			resource_key,
+			repository,
+			kind,
+			number,
+			etag,
+			interval_ns,
+			next_poll_at,
+			resource_updated_at
+		) VALUES (
+			'github.com/acme/api:item:12:activity',
+			'github.com/acme/api',
+			'activity',
+			12,
+			'"legacy-inline"',
+			1000000000,
+			0,
+			0
+		)
+	`); err != nil {
+		t.Fatalf("create legacy poll resource: %v", err)
+	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close legacy database: %v", err)
 	}
@@ -997,10 +1065,21 @@ func TestOpenMigratesWorkItemColumns(t *testing.T) {
 		"deletions",
 		"labels_json",
 		"latest_activity_json",
+		"latest_review_comment_json",
 		"missing_polls",
 	} {
 		if _, ok := columns[name]; !ok {
 			t.Fatalf("migrated column %q is missing", name)
 		}
+	}
+	var etag string
+	if err := database.db.QueryRow(
+		"SELECT etag FROM poll_resources WHERE resource_key = ?",
+		"github.com/acme/api:item:12:activity",
+	).Scan(&etag); err != nil {
+		t.Fatalf("load migrated activity ETag: %v", err)
+	}
+	if etag != "" {
+		t.Fatalf("migrated activity ETag = %q, want empty cache reset", etag)
 	}
 }

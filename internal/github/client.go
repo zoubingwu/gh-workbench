@@ -508,17 +508,13 @@ func (c *Client) FetchLatestActivities(
 	for _, target := range targets {
 		activity := activities[target.NodeID]
 		etag := target.ETag
+		var latestReviewComment *model.Activity
 		if target.Kind == model.ItemKindPullRequest {
-			requestETag := ""
-			if target.LatestActivity != nil &&
-				target.LatestActivity.Kind == "review_comment" {
-				requestETag = target.ETag
-			}
 			inline, responseETag, unchanged, err := c.fetchLatestReviewComment(
 				ctx,
 				target.Repository,
 				target.Number,
-				requestETag,
+				target.ETag,
 			)
 			if err != nil {
 				return nil, fmt.Errorf(
@@ -529,8 +525,9 @@ func (c *Client) FetchLatestActivities(
 			}
 			etag = responseETag
 			if unchanged {
-				inline = target.LatestActivity
+				inline = target.LatestReviewComment
 			}
+			latestReviewComment = inline
 			activity = laterActivity(activity, inline)
 			if activity != nil && inline != nil &&
 				inline.OccurredAt.Equal(activity.OccurredAt) {
@@ -538,8 +535,9 @@ func (c *Client) FetchLatestActivities(
 			}
 		}
 		results = append(results, model.ActivityResult{
-			Activity: activity,
-			ETag:     etag,
+			Activity:            activity,
+			LatestReviewComment: latestReviewComment,
+			ETag:                etag,
 		})
 	}
 	return results, nil

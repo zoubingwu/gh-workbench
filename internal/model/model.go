@@ -67,27 +67,28 @@ type PollStatus struct {
 }
 
 type WorkItem struct {
-	NodeID         string     `json:"-"`
-	Repository     string     `json:"repository"`
-	RepositoryKey  string     `json:"-"`
-	Number         int        `json:"number"`
-	Kind           ItemKind   `json:"kind"`
-	Title          string     `json:"title"`
-	URL            string     `json:"url"`
-	State          string     `json:"state"`
-	Author         string     `json:"author"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
-	IsDraft        bool       `json:"isDraft"`
-	ReviewDecision string     `json:"reviewDecision"`
-	MergeState     string     `json:"mergeState"`
-	NeedsReview    bool       `json:"needsReview"`
-	Additions      int        `json:"additions"`
-	Deletions      int        `json:"deletions"`
-	Labels         []Label    `json:"labels"`
-	LatestActivity *Activity  `json:"latestActivity"`
-	Reactions      []Reaction `json:"reactions"`
-	Poll           PollStatus `json:"poll"`
+	NodeID              string     `json:"-"`
+	Repository          string     `json:"repository"`
+	RepositoryKey       string     `json:"-"`
+	Number              int        `json:"number"`
+	Kind                ItemKind   `json:"kind"`
+	Title               string     `json:"title"`
+	URL                 string     `json:"url"`
+	State               string     `json:"state"`
+	Author              string     `json:"author"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	UpdatedAt           time.Time  `json:"updatedAt"`
+	IsDraft             bool       `json:"isDraft"`
+	ReviewDecision      string     `json:"reviewDecision"`
+	MergeState          string     `json:"mergeState"`
+	NeedsReview         bool       `json:"needsReview"`
+	Additions           int        `json:"additions"`
+	Deletions           int        `json:"deletions"`
+	Labels              []Label    `json:"labels"`
+	LatestActivity      *Activity  `json:"latestActivity"`
+	LatestReviewComment *Activity  `json:"-"`
+	Reactions           []Reaction `json:"reactions"`
+	Poll                PollStatus `json:"poll"`
 }
 
 type ItemsResult struct {
@@ -103,17 +104,19 @@ type ReactionsResult struct {
 }
 
 type ActivityTarget struct {
-	NodeID         string
-	Repository     Repository
-	Number         int
-	Kind           ItemKind
-	LatestActivity *Activity
-	ETag           string
+	NodeID              string
+	Repository          Repository
+	Number              int
+	Kind                ItemKind
+	LatestActivity      *Activity
+	LatestReviewComment *Activity
+	ETag                string
 }
 
 type ActivityResult struct {
-	Activity *Activity
-	ETag     string
+	Activity            *Activity
+	LatestReviewComment *Activity
+	ETag                string
 }
 
 type SyncStatus struct {
@@ -132,23 +135,24 @@ type Snapshot struct {
 }
 
 type PollResource struct {
-	Key               string
-	Revision          int64
-	Repository        string
-	Kind              ResourceKind
-	Number            int
-	ETag              string
-	Interval          time.Duration
-	NextPollAt        time.Time
-	LastPollAt        *time.Time
-	LastSuccessAt     *time.Time
-	LastChangedAt     *time.Time
-	ResourceUpdatedAt time.Time
-	UnchangedCount    int
-	LastError         string
-	NodeID            string
-	ItemKind          ItemKind
-	LatestActivity    *Activity
+	Key                 string
+	Revision            int64
+	Repository          string
+	Kind                ResourceKind
+	Number              int
+	ETag                string
+	Interval            time.Duration
+	NextPollAt          time.Time
+	LastPollAt          *time.Time
+	LastSuccessAt       *time.Time
+	LastChangedAt       *time.Time
+	ResourceUpdatedAt   time.Time
+	UnchangedCount      int
+	LastError           string
+	NodeID              string
+	ItemKind            ItemKind
+	LatestActivity      *Activity
+	LatestReviewComment *Activity
 }
 
 func WorkItemsResourceKey(host string) string {

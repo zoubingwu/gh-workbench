@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS work_items (
 	deletions INTEGER NOT NULL DEFAULT 0,
 	labels_json TEXT NOT NULL DEFAULT '[]',
 	latest_activity_json TEXT,
+	latest_review_comment_json TEXT,
 	missing_polls INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (repository, number)
 );
@@ -155,6 +156,7 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("close work item schema: %w", err)
 	}
+	_, hadReviewCommentCache := columns["latest_review_comment_json"]
 
 	migrations := []struct {
 		name string
@@ -169,6 +171,7 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 		{name: "deletions", sql: "ALTER TABLE work_items ADD COLUMN deletions INTEGER NOT NULL DEFAULT 0"},
 		{name: "labels_json", sql: "ALTER TABLE work_items ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]'"},
 		{name: "latest_activity_json", sql: "ALTER TABLE work_items ADD COLUMN latest_activity_json TEXT"},
+		{name: "latest_review_comment_json", sql: "ALTER TABLE work_items ADD COLUMN latest_review_comment_json TEXT"},
 		{name: "missing_polls", sql: "ALTER TABLE work_items ADD COLUMN missing_polls INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, migration := range migrations {
@@ -177,6 +180,15 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 		}
 		if _, err := s.db.ExecContext(ctx, migration.sql); err != nil {
 			return fmt.Errorf("add work item column %q: %w", migration.name, err)
+		}
+	}
+	if !hadReviewCommentCache {
+		if _, err := s.db.ExecContext(
+			ctx,
+			"UPDATE poll_resources SET etag = '' WHERE kind = ?",
+			model.ResourceKindActivity,
+		); err != nil {
+			return fmt.Errorf("reset activity ETags for review comment cache: %w", err)
 		}
 	}
 	return nil
@@ -245,23 +257,24 @@ func (s *Store) EnsureAccount(
 }
 
 type itemRecord struct {
-	nodeID         string
-	kind           model.ItemKind
-	title          string
-	url            string
-	state          string
-	author         string
-	createdAt      time.Time
-	updatedAt      time.Time
-	isDraft        bool
-	reviewDecision string
-	mergeState     string
-	needsReview    bool
-	additions      int
-	deletions      int
-	labelsJSON     string
-	activityJSON   sql.NullString
-	missingPolls   int
+	nodeID            string
+	kind              model.ItemKind
+	title             string
+	url               string
+	state             string
+	author            string
+	createdAt         time.Time
+	updatedAt         time.Time
+	isDraft           bool
+	reviewDecision    string
+	mergeState        string
+	needsReview       bool
+	additions         int
+	deletions         int
+	labelsJSON        string
+	activityJSON      sql.NullString
+	reviewCommentJSON sql.NullString
+	missingPolls      int
 }
 
 func (s *Store) ReplaceRelevantOpenItems(
@@ -332,27 +345,39 @@ func (s *Store) ReplaceRelevantOpenItems(
 		if err != nil {
 			return false, fmt.Errorf("encode latest activity for %q: %w", item.URL, err)
 		}
+		reviewCommentJSON, err := encodeActivity(item.LatestReviewComment)
+		if err != nil {
+			return false, fmt.Errorf(
+				"encode latest review comment for %q: %w",
+				item.URL,
+				err,
+			)
+		}
 		record := itemRecord{
-			nodeID:         item.NodeID,
-			kind:           item.Kind,
-			title:          item.Title,
-			url:            item.URL,
-			state:          strings.ToLower(item.State),
-			author:         item.Author,
-			createdAt:      item.CreatedAt,
-			updatedAt:      item.UpdatedAt,
-			isDraft:        item.IsDraft,
-			reviewDecision: item.ReviewDecision,
-			mergeState:     item.MergeState,
-			needsReview:    item.NeedsReview,
-			additions:      item.Additions,
-			deletions:      item.Deletions,
-			labelsJSON:     labelsJSON,
-			activityJSON:   activityJSON,
+			nodeID:            item.NodeID,
+			kind:              item.Kind,
+			title:             item.Title,
+			url:               item.URL,
+			state:             strings.ToLower(item.State),
+			author:            item.Author,
+			createdAt:         item.CreatedAt,
+			updatedAt:         item.UpdatedAt,
+			isDraft:           item.IsDraft,
+			reviewDecision:    item.ReviewDecision,
+			mergeState:        item.MergeState,
+			needsReview:       item.NeedsReview,
+			additions:         item.Additions,
+			deletions:         item.Deletions,
+			labelsJSON:        labelsJSON,
+			activityJSON:      activityJSON,
+			reviewCommentJSON: reviewCommentJSON,
 		}
 		old, exists := existing[key]
 		if !activityJSON.Valid && exists {
 			record.activityJSON = old.activityJSON
+		}
+		if !reviewCommentJSON.Valid && exists {
+			record.reviewCommentJSON = old.reviewCommentJSON
 		}
 		if !exists || old != record {
 			changed = true
@@ -379,8 +404,9 @@ func (s *Store) ReplaceRelevantOpenItems(
 				deletions,
 				labels_json,
 				latest_activity_json,
+				latest_review_comment_json,
 				missing_polls
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(repository, number) DO UPDATE SET
 				node_id = excluded.node_id,
 				kind = excluded.kind,
@@ -401,6 +427,10 @@ func (s *Store) ReplaceRelevantOpenItems(
 					excluded.latest_activity_json,
 					work_items.latest_activity_json
 				),
+				latest_review_comment_json = COALESCE(
+					excluded.latest_review_comment_json,
+					work_items.latest_review_comment_json
+				),
 				missing_polls = 0`,
 			item.RepositoryKey,
 			item.Number,
@@ -420,6 +450,7 @@ func (s *Store) ReplaceRelevantOpenItems(
 			item.Deletions,
 			labelsJSON,
 			activityJSON,
+			reviewCommentJSON,
 		); err != nil {
 			return false, fmt.Errorf("upsert work item %q: %w", item.URL, err)
 		}
@@ -533,6 +564,7 @@ func loadItemRecords(
 			deletions,
 			labels_json,
 			latest_activity_json,
+			latest_review_comment_json,
 			missing_polls
 		FROM work_items
 		WHERE repository = ? OR repository GLOB ?`,
@@ -571,6 +603,7 @@ func loadItemRecords(
 			&record.deletions,
 			&record.labelsJSON,
 			&record.activityJSON,
+			&record.reviewCommentJSON,
 			&record.missingPolls,
 		); err != nil {
 			return nil, fmt.Errorf("scan existing work item: %w", err)
@@ -813,6 +846,7 @@ func (s *Store) ReplaceActivity(
 	number int,
 	expectedRevision int64,
 	activity *model.Activity,
+	latestReviewComment *model.Activity,
 ) (bool, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -821,12 +855,16 @@ func (s *Store) ReplaceActivity(
 	defer func() { _ = tx.Rollback() }()
 
 	var (
-		revision int64
-		existing sql.NullString
+		revision              int64
+		existingActivity      sql.NullString
+		existingReviewComment sql.NullString
 	)
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT poll_resources.revision, work_items.latest_activity_json
+		`SELECT
+			poll_resources.revision,
+			work_items.latest_activity_json,
+			work_items.latest_review_comment_json
 		FROM work_items
 		JOIN poll_resources ON poll_resources.resource_key = ?
 		WHERE work_items.repository = ?
@@ -836,7 +874,7 @@ func (s *Store) ReplaceActivity(
 		repository,
 		number,
 		model.ResourceKindActivity,
-	).Scan(&revision, &existing)
+	).Scan(&revision, &existingActivity, &existingReviewComment)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	}
@@ -851,20 +889,32 @@ func (s *Store) ReplaceActivity(
 		return false, false, nil
 	}
 
-	encoded, err := encodeActivity(activity)
+	encodedActivity, err := encodeActivity(activity)
 	if err != nil {
 		return false, false, fmt.Errorf("encode activity for item %d: %w", number, err)
 	}
-	if existing == encoded {
+	encodedReviewComment, err := encodeActivity(latestReviewComment)
+	if err != nil {
+		return false, false, fmt.Errorf(
+			"encode review comment for item %d: %w",
+			number,
+			err,
+		)
+	}
+	activityChanged := existingActivity != encodedActivity
+	if !activityChanged && existingReviewComment == encodedReviewComment {
 		return false, true, nil
 	}
 
 	if _, err := tx.ExecContext(
 		ctx,
 		`UPDATE work_items
-		SET latest_activity_json = ?
+		SET
+			latest_activity_json = ?,
+			latest_review_comment_json = ?
 		WHERE repository = ? AND number = ?`,
-		encoded,
+		encodedActivity,
+		encodedReviewComment,
 		repository,
 		number,
 	); err != nil {
@@ -873,7 +923,7 @@ func (s *Store) ReplaceActivity(
 	if err := tx.Commit(); err != nil {
 		return false, false, fmt.Errorf("commit activity reconciliation: %w", err)
 	}
-	return true, true, nil
+	return activityChanged, true, nil
 }
 
 type queryer interface {
@@ -948,7 +998,8 @@ func (s *Store) ListDueResources(
 			poll_resources.revision,
 			work_items.node_id,
 			work_items.kind,
-			work_items.latest_activity_json
+			work_items.latest_activity_json,
+			work_items.latest_review_comment_json
 		FROM poll_resources
 		LEFT JOIN work_items
 			ON work_items.repository = poll_resources.repository
@@ -1313,7 +1364,8 @@ func (s *Store) loadResources(
 			poll_resources.revision,
 			work_items.node_id,
 			work_items.kind,
-			work_items.latest_activity_json
+			work_items.latest_activity_json,
+			work_items.latest_review_comment_json
 		FROM poll_resources
 		LEFT JOIN work_items
 			ON work_items.repository = poll_resources.repository
@@ -1358,6 +1410,7 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 		nodeID            sql.NullString
 		itemKind          sql.NullString
 		activityJSON      sql.NullString
+		reviewCommentJSON sql.NullString
 	)
 	if err := row.Scan(
 		&resource.Key,
@@ -1377,6 +1430,7 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 		&nodeID,
 		&itemKind,
 		&activityJSON,
+		&reviewCommentJSON,
 	); err != nil {
 		return model.PollResource{}, fmt.Errorf("scan poll resource: %w", err)
 	}
@@ -1397,6 +1451,15 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 		)
 	}
 	resource.LatestActivity = activity
+	reviewComment, err := decodeActivity(reviewCommentJSON)
+	if err != nil {
+		return model.PollResource{}, fmt.Errorf(
+			"decode poll resource %q review comment: %w",
+			resource.Key,
+			err,
+		)
+	}
+	resource.LatestReviewComment = reviewComment
 	return resource, nil
 }
 

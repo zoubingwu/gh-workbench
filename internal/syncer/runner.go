@@ -60,6 +60,7 @@ type Storage interface {
 		int,
 		int64,
 		*model.Activity,
+		*model.Activity,
 	) (bool, bool, error)
 	SavePollResource(context.Context, model.PollResource) error
 	ForceDue(context.Context, string, time.Time) error
@@ -351,12 +352,13 @@ func (r *Runner) pollActivities(
 			return publish, errors.Join(err, saveErr)
 		}
 		targets = append(targets, model.ActivityTarget{
-			NodeID:         resource.NodeID,
-			Repository:     repository,
-			Number:         resource.Number,
-			Kind:           resource.ItemKind,
-			LatestActivity: resource.LatestActivity,
-			ETag:           resource.ETag,
+			NodeID:              resource.NodeID,
+			Repository:          repository,
+			Number:              resource.Number,
+			Kind:                resource.ItemKind,
+			LatestActivity:      resource.LatestActivity,
+			LatestReviewComment: resource.LatestReviewComment,
+			ETag:                resource.ETag,
 		})
 	}
 
@@ -384,6 +386,7 @@ func (r *Runner) pollActivities(
 			resource.Number,
 			resource.Revision,
 			result.Activity,
+			result.LatestReviewComment,
 		)
 		if err != nil {
 			itemPublished, saveErr := r.savePollOutcome(

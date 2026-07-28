@@ -20,7 +20,8 @@ by GitHub host and viewer login.
    coalesced into GraphQL batches of up to 50, while pull-request inline review
    comments use conditional REST requests.
 6. Each relevant pull request receives an independent REST reaction poll.
-7. SQLite stores GitHub data, ETags, and the next polling time.
+7. SQLite stores GitHub data, ETags, the cached inline-review candidate, and the
+   next polling time.
 8. A bounded worker pool leases due resources and publishes aggregate snapshots
    to browsers over WebSocket.
 
