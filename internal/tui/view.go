@@ -28,7 +28,6 @@ const (
 
 func (m terminalModel) View() tea.View {
 	var lines []string
-	lines = append(lines, style("GitHub Workbench", ansiBold, ansiCyan))
 
 	if m.loaded {
 		lines = append(lines, m.headerLine())
@@ -50,10 +49,14 @@ func (m terminalModel) View() tea.View {
 			style(terminalText(m.action), ansiCyan),
 		)
 	}
-	tail = append(tail, "", style(
+	shortcuts := style(
 		"↑/k ↓/j move  1–3 filter  m mine  i inactive  r sync  enter/o open  q quit",
 		ansiDim,
-	))
+	)
+	footer := style("GitHub Workbench", ansiBold, ansiCyan) +
+		"  ·  " +
+		shortcuts
+	tail = append(tail, "", footer)
 
 	items := m.visibleItems()
 	if m.loaded && len(items) == 0 {
@@ -225,7 +228,7 @@ func itemRangeLineCount(
 }
 
 func (m terminalModel) listHeight() int {
-	fixedLines := 6
+	fixedLines := 5
 	if m.errorLine() != "" {
 		fixedLines++
 	}

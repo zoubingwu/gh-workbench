@@ -367,6 +367,69 @@ func TestViewFillsTerminalHeight(t *testing.T) {
 	}
 }
 
+func TestViewPlacesTitleInShortcutFooterAndReclaimsTopLine(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	first := workItem(
+		"acme/api",
+		1,
+		model.ItemKindIssue,
+		"alice",
+		now,
+	)
+	first.Title = "First work item"
+	second := workItem(
+		"acme/api",
+		2,
+		model.ItemKindIssue,
+		"alice",
+		now,
+	)
+	second.Title = "Second work item"
+
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, tea.WindowSizeMsg{
+		Width:  120,
+		Height: 11,
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Host:            "github.com",
+			Viewer:          "alice",
+			RepositoryCount: 1,
+			GeneratedAt:     now,
+			Items: []model.WorkItem{
+				first,
+				second,
+			},
+		},
+	})
+
+	view := ansi.Strip(current.View().Content)
+	lines := strings.Split(view, "\n")
+	if !strings.Contains(lines[0], "alice@github.com") {
+		t.Fatalf("first line = %q, want account header", lines[0])
+	}
+	footer := lines[len(lines)-1]
+	for _, value := range []string{
+		"GitHub Workbench",
+		"↑/k ↓/j move",
+	} {
+		if !strings.Contains(footer, value) {
+			t.Fatalf("footer missing %q: %q", value, footer)
+		}
+	}
+	if count := strings.Count(view, "GitHub Workbench"); count != 1 {
+		t.Fatalf("title count = %d, want 1:\n%s", count, view)
+	}
+	if !strings.Contains(view, "Second work item") {
+		t.Fatalf("reclaimed top line did not expose second item:\n%s", view)
+	}
+}
+
 func TestModelQuitKeys(t *testing.T) {
 	t.Parallel()
 
