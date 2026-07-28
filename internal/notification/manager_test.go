@@ -164,7 +164,7 @@ func TestManagerAdvancesCursorWhileDisabledAndAcrossOmissions(t *testing.T) {
 	}
 }
 
-func TestManagerReportsActivityDiscoveredAfterAQuietBaseline(t *testing.T) {
+func TestManagerReportsNewActivityAfterAQuietBaseline(t *testing.T) {
 	t.Parallel()
 
 	sender := &fakeSender{}
@@ -177,7 +177,7 @@ func TestManagerReportsActivityDiscoveredAfterAQuietBaseline(t *testing.T) {
 	item.LatestActivity = &model.Activity{
 		Kind:       "comment",
 		Actor:      "alice",
-		OccurredAt: time.Date(2026, time.July, 28, 11, 59, 0, 0, time.UTC),
+		OccurredAt: item.UpdatedAt.Add(time.Minute),
 		URL:        item.URL + "#issuecomment-delayed",
 	}
 	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
@@ -187,6 +187,57 @@ func TestManagerReportsActivityDiscoveredAfterAQuietBaseline(t *testing.T) {
 		sender.messages[0].Body != "alice commented" {
 		t.Fatalf(
 			"sent messages = %#v, want delayed activity",
+			sender.messages,
+		)
+	}
+}
+
+func TestManagerSuppressesFirstActivityHydrationForNewItem(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	manager := New(sender)
+	if err := manager.Observe(t.Context(), testSnapshot()); err != nil {
+		t.Fatalf("initial Observe() error = %v", err)
+	}
+
+	item := testItem()
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("new item Observe() error = %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("new item messages = %#v, want one", sender.messages)
+	}
+
+	item.LatestActivity = &model.Activity{
+		Kind:       "comment",
+		Actor:      "alice",
+		OccurredAt: item.UpdatedAt.Add(-time.Minute),
+		URL:        item.URL + "#issuecomment-existing",
+	}
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("existing activity Observe() error = %v", err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf(
+			"messages after existing activity hydration = %#v, want unchanged",
+			sender.messages,
+		)
+	}
+
+	item.LatestActivity = &model.Activity{
+		Kind:       "comment",
+		Actor:      "bob",
+		OccurredAt: item.UpdatedAt.Add(time.Minute),
+		URL:        item.URL + "#issuecomment-new",
+	}
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("new activity Observe() error = %v", err)
+	}
+	if len(sender.messages) != 2 ||
+		sender.messages[1].Body != "bob commented" {
+		t.Fatalf(
+			"messages after new activity = %#v, want new comment",
 			sender.messages,
 		)
 	}
@@ -271,5 +322,6 @@ func testItem() model.WorkItem {
 		Title:      "Add system notifications",
 		URL:        "https://github.com/acme/web/pull/42",
 		Author:     "alice",
+		UpdatedAt:  time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC),
 	}
 }

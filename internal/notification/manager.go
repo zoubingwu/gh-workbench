@@ -55,7 +55,7 @@ func (m *Manager) Observe(ctx context.Context, snapshot model.Snapshot) error {
 	for _, item := range snapshot.Items {
 		key := itemKey(item)
 		previous, exists := m.cursors[key]
-		current := activityTime(item)
+		current := nextActivityCursor(item, previous, exists)
 
 		if m.isInitialized && snapshot.Notifications.Enabled {
 			message, ok := messageForChange(
@@ -150,11 +150,18 @@ func itemKey(item model.WorkItem) string {
 	return fmt.Sprintf("%s:%s:%d", item.Repository, item.Kind, item.Number)
 }
 
-func activityTime(item model.WorkItem) time.Time {
+func nextActivityCursor(
+	item model.WorkItem,
+	previous time.Time,
+	exists bool,
+) time.Time {
 	if item.LatestActivity != nil && !item.LatestActivity.OccurredAt.IsZero() {
 		return item.LatestActivity.OccurredAt
 	}
-	return time.Time{}
+	if !exists {
+		return item.UpdatedAt
+	}
+	return previous
 }
 
 func sameLogin(login string, viewer string) bool {
