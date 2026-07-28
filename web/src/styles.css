@@ -399,6 +399,30 @@ h1 {
   vertical-align: middle;
 }
 
+.issue-labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 0 8px;
+  padding: 0;
+  list-style: none;
+  vertical-align: middle;
+}
+
+.issue-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 7px;
+  border: 1px solid rgba(31, 35, 40, 0.15);
+  border-radius: 2em;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -585,7 +609,8 @@ h1 {
     padding-left: 12px;
   }
 
-  .item-summary {
+  .item-summary,
+  .issue-labels {
     display: flex;
     margin-top: 4px;
     margin-left: 0;

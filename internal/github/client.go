@@ -325,6 +325,13 @@ func (c *Client) searchOpenItems(
 			if node.TypeName == "PullRequest" {
 				kind = model.ItemKindPullRequest
 			}
+			labels := make([]model.Label, 0, len(node.Labels.Nodes))
+			for _, label := range node.Labels.Nodes {
+				labels = append(labels, model.Label{
+					Name:  label.Name,
+					Color: label.Color,
+				})
+			}
 			items = append(items, model.WorkItem{
 				Repository:     repository.FullName(),
 				RepositoryKey:  repository.Key(),
@@ -342,6 +349,7 @@ func (c *Client) searchOpenItems(
 				NeedsReview:    needsReview,
 				Additions:      node.Additions,
 				Deletions:      node.Deletions,
+				Labels:         labels,
 				Reactions:      make([]model.Reaction, 0),
 			})
 		}
@@ -693,6 +701,12 @@ query RelevantOpenItems($query: String!, $after: String) {
         repository {
           nameWithOwner
         }
+        labels(first: 100, orderBy: {field: NAME, direction: ASC}) {
+          nodes {
+            name
+            color
+          }
+        }
       }
       ... on PullRequest {
         number
@@ -755,7 +769,10 @@ type graphQLSearchNode struct {
 	MergeStateStatus string        `json:"mergeStateStatus"`
 	Additions        int           `json:"additions"`
 	Deletions        int           `json:"deletions"`
-	Repository       struct {
+	Labels           struct {
+		Nodes []labelResponse `json:"nodes"`
+	} `json:"labels"`
+	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
 }
@@ -766,6 +783,11 @@ type graphQLError struct {
 
 type userResponse struct {
 	Login string `json:"login"`
+}
+
+type labelResponse struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
 }
 
 type reactionResponse struct {

@@ -7,6 +7,11 @@ export type Reaction = {
   createdAt: string;
 };
 
+export type Label = {
+  name: string;
+  color: string;
+};
+
 export type PollState = {
   intervalSeconds: number;
   nextPollAt: string;
@@ -32,6 +37,7 @@ export type WorkItem = {
   needsReview: boolean;
   additions: number;
   deletions: number;
+  labels: Label[];
   reactions: Reaction[];
   poll: PollState;
 };

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,10 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 			Author:        "hubot",
 			CreatedAt:     now.Add(-72 * time.Hour),
 			UpdatedAt:     now.Add(-24 * time.Hour),
+			Labels: []model.Label{
+				{Name: "bug", Color: "d73a4a"},
+				{Name: "priority: high", Color: "b60205"},
+			},
 		},
 	}
 
@@ -74,6 +79,19 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 	}
 	if changed {
 		t.Fatal("second ReplaceRelevantOpenItems() changed = true, want false")
+	}
+	items[1].Labels[0].Color = "cf222e"
+	changed, err = database.ReplaceRelevantOpenItems(
+		ctx,
+		host,
+		items,
+		now.Add(90*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("ReplaceRelevantOpenItems() after label change error = %v", err)
+	}
+	if !changed {
+		t.Fatal("ReplaceRelevantOpenItems() after label change = false, want true")
 	}
 
 	reactions := []model.Reaction{
@@ -137,6 +155,14 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 	if len(pullRequest.Reactions) != 1 ||
 		pullRequest.Reactions[0].Content != "eyes" {
 		t.Fatalf("pull request reactions = %#v, want eyes", pullRequest.Reactions)
+	}
+	issue := byURL["https://github.com/octocat/satellite/issues/3"]
+	wantLabels := []model.Label{
+		{Name: "bug", Color: "cf222e"},
+		{Name: "priority: high", Color: "b60205"},
+	}
+	if !slices.Equal(issue.Labels, wantLabels) {
+		t.Fatalf("issue labels = %#v, want %#v", issue.Labels, wantLabels)
 	}
 
 	due, err := database.ListDueResources(ctx, host, now.Add(time.Second), 10)
@@ -653,6 +679,7 @@ func TestOpenMigratesWorkItemColumns(t *testing.T) {
 		"needs_review",
 		"additions",
 		"deletions",
+		"labels_json",
 		"missing_polls",
 	} {
 		if _, ok := columns[name]; !ok {

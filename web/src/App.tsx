@@ -14,6 +14,7 @@ type ConnectionState = "connecting" | "connected" | "disconnected";
 
 const SHOW_INACTIVE_STORAGE_KEY = "gh-workbench:show-inactive:v1";
 const ONLY_MY_PULL_REQUESTS_STORAGE_KEY = "gh-workbench:only-my-pull-requests:v1";
+const LABEL_COLOR_PATTERN = /^#?([0-9a-f]{6})$/i;
 
 const filterLabels: Readonly<Record<ItemFilter, string>> = {
   all: "All",
@@ -58,6 +59,24 @@ function groupedReactions(reactions: readonly Reaction[]) {
   }
 
   return Array.from(groups, ([content, group]) => ({ content, ...group }));
+}
+
+function linearColorChannel(color: string, offset: number) {
+  const channel = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
+  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+}
+
+function issueLabelStyle(rawColor: string) {
+  const color = LABEL_COLOR_PATTERN.exec(rawColor)?.[1]?.toLowerCase() ?? "afb8c1";
+  const red = linearColorChannel(color, 0);
+  const green = linearColorChannel(color, 2);
+  const blue = linearColorChannel(color, 4);
+  const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+
+  return {
+    backgroundColor: `#${color}`,
+    color: luminance > 0.179 ? "#000000" : "#ffffff",
+  };
 }
 
 function WorkItemIcon({ kind }: { kind: WorkItem["kind"] }) {
@@ -107,6 +126,14 @@ export function WorkItemRow({ item, now }: { item: WorkItem; now: number }) {
                   <span className="deletions">-{item.deletions}</span>
                 </span>
               </div>
+            ) : item.labels.length > 0 ? (
+              <ul className="issue-labels" aria-label="Labels">
+                {item.labels.map((label) => (
+                  <li className="issue-label" key={label.name} style={issueLabelStyle(label.color)}>
+                    {label.name}
+                  </li>
+                ))}
+              </ul>
             ) : null}
           </div>
         </div>

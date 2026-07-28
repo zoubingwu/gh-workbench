@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -70,6 +71,7 @@ CREATE TABLE IF NOT EXISTS work_items (
 	needs_review INTEGER NOT NULL DEFAULT 0,
 	additions INTEGER NOT NULL DEFAULT 0,
 	deletions INTEGER NOT NULL DEFAULT 0,
+	labels_json TEXT NOT NULL DEFAULT '[]',
 	missing_polls INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (repository, number)
 );
@@ -162,6 +164,7 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 		{name: "needs_review", sql: "ALTER TABLE work_items ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0"},
 		{name: "additions", sql: "ALTER TABLE work_items ADD COLUMN additions INTEGER NOT NULL DEFAULT 0"},
 		{name: "deletions", sql: "ALTER TABLE work_items ADD COLUMN deletions INTEGER NOT NULL DEFAULT 0"},
+		{name: "labels_json", sql: "ALTER TABLE work_items ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]'"},
 		{name: "missing_polls", sql: "ALTER TABLE work_items ADD COLUMN missing_polls INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, migration := range migrations {
@@ -251,6 +254,7 @@ type itemRecord struct {
 	needsReview    bool
 	additions      int
 	deletions      int
+	labelsJSON     string
 	missingPolls   int
 }
 
@@ -309,6 +313,15 @@ func (s *Store) ReplaceRelevantOpenItems(
 			continue
 		}
 		seen[key] = struct{}{}
+		labels := item.Labels
+		if labels == nil {
+			labels = make([]model.Label, 0)
+		}
+		encodedLabels, err := json.Marshal(labels)
+		if err != nil {
+			return false, fmt.Errorf("encode work item labels for %q: %w", item.URL, err)
+		}
+		labelsJSON := string(encodedLabels)
 		record := itemRecord{
 			kind:           item.Kind,
 			title:          item.Title,
@@ -323,6 +336,7 @@ func (s *Store) ReplaceRelevantOpenItems(
 			needsReview:    item.NeedsReview,
 			additions:      item.Additions,
 			deletions:      item.Deletions,
+			labelsJSON:     labelsJSON,
 		}
 		if old, ok := existing[key]; !ok || old != record {
 			changed = true
@@ -346,8 +360,9 @@ func (s *Store) ReplaceRelevantOpenItems(
 				needs_review,
 				additions,
 				deletions,
+				labels_json,
 				missing_polls
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(repository, number) DO UPDATE SET
 				kind = excluded.kind,
 				title = excluded.title,
@@ -362,6 +377,7 @@ func (s *Store) ReplaceRelevantOpenItems(
 				needs_review = excluded.needs_review,
 				additions = excluded.additions,
 				deletions = excluded.deletions,
+				labels_json = excluded.labels_json,
 				missing_polls = 0`,
 			item.RepositoryKey,
 			item.Number,
@@ -378,6 +394,7 @@ func (s *Store) ReplaceRelevantOpenItems(
 			item.NeedsReview,
 			item.Additions,
 			item.Deletions,
+			labelsJSON,
 		); err != nil {
 			return false, fmt.Errorf("upsert work item %q: %w", item.URL, err)
 		}
@@ -476,6 +493,7 @@ func loadItemRecords(
 			needs_review,
 			additions,
 			deletions,
+			labels_json,
 			missing_polls
 		FROM work_items
 		WHERE repository = ? OR repository GLOB ?`,
@@ -511,6 +529,7 @@ func loadItemRecords(
 			&record.needsReview,
 			&record.additions,
 			&record.deletions,
+			&record.labelsJSON,
 			&record.missingPolls,
 		); err != nil {
 			return nil, fmt.Errorf("scan existing work item: %w", err)
@@ -942,7 +961,8 @@ func (s *Store) loadItems(
 			merge_state,
 			needs_review,
 			additions,
-			deletions
+			deletions,
+			labels_json
 		FROM work_items
 		WHERE (repository = ? OR repository GLOB ?)
 			AND missing_polls = 0
@@ -957,9 +977,10 @@ func (s *Store) loadItems(
 	items := make([]model.WorkItem, 0)
 	for rows.Next() {
 		var (
-			item      model.WorkItem
-			createdAt int64
-			updatedAt int64
+			item       model.WorkItem
+			createdAt  int64
+			updatedAt  int64
+			labelsJSON string
 		)
 		if err := rows.Scan(
 			&item.RepositoryKey,
@@ -977,12 +998,25 @@ func (s *Store) loadItems(
 			&item.NeedsReview,
 			&item.Additions,
 			&item.Deletions,
+			&labelsJSON,
 		); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan snapshot work item: %w", err)
 		}
 		item.CreatedAt = time.Unix(0, createdAt).UTC()
 		item.UpdatedAt = time.Unix(0, updatedAt).UTC()
+		if err := json.Unmarshal([]byte(labelsJSON), &item.Labels); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf(
+				"decode snapshot work item labels for %s#%d: %w",
+				item.RepositoryKey,
+				item.Number,
+				err,
+			)
+		}
+		if item.Labels == nil {
+			item.Labels = make([]model.Label, 0)
+		}
 		repository, err := model.ParseRepositoryKey(item.RepositoryKey)
 		if err != nil {
 			rows.Close()

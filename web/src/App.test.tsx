@@ -19,6 +19,7 @@ const item: WorkItem = {
   needsReview: true,
   additions: 12,
   deletions: 3,
+  labels: [],
   reactions: [],
   poll: {
     intervalSeconds: 60,
@@ -55,5 +56,47 @@ describe("WorkItemRow", () => {
     );
 
     expect(markup).not.toContain('class="status-badge"');
+  });
+
+  it("renders GitHub labels for issues", () => {
+    const markup = renderToStaticMarkup(
+      <WorkItemRow
+        item={{
+          ...item,
+          kind: "issue",
+          title: "Track API errors",
+          url: "https://github.com/acme/web/issues/42",
+          labels: [
+            { name: "bug", color: "d73a4a" },
+            { name: "good first issue", color: "7057ff" },
+            { name: "help wanted", color: "fbca04" },
+          ],
+        }}
+        now={Date.parse("2026-07-28T00:00:00Z")}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Labels"');
+    expect(markup).toContain(">bug</li>");
+    expect(markup).toContain(">good first issue</li>");
+    expect(markup).toContain(">help wanted</li>");
+    expect(markup).toContain("background-color:#d73a4a");
+    expect(markup).toContain("background-color:#7057ff;color:#ffffff");
+    expect(markup).toContain("background-color:#fbca04;color:#000000");
+  });
+
+  it("keeps issue labels out of pull request rows", () => {
+    const markup = renderToStaticMarkup(
+      <WorkItemRow
+        item={{
+          ...item,
+          labels: [{ name: "bug", color: "d73a4a" }],
+        }}
+        now={Date.parse("2026-07-28T00:00:00Z")}
+      />,
+    );
+
+    expect(markup).not.toContain('aria-label="Labels"');
+    expect(markup).not.toContain(">bug</li>");
   });
 });

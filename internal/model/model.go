@@ -43,6 +43,11 @@ type Reaction struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+type Label struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
 type PollStatus struct {
 	IntervalSeconds int64      `json:"intervalSeconds"`
 	NextPollAt      time.Time  `json:"nextPollAt"`
@@ -69,6 +74,7 @@ type WorkItem struct {
 	NeedsReview    bool       `json:"needsReview"`
 	Additions      int        `json:"additions"`
 	Deletions      int        `json:"deletions"`
+	Labels         []Label    `json:"labels"`
 	Reactions      []Reaction `json:"reactions"`
 	Poll           PollStatus `json:"poll"`
 }

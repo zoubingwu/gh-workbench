@@ -35,6 +35,9 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 		if !strings.Contains(payload.Query, "issueCount") {
 			t.Fatalf("GraphQL query = %q, want issueCount", payload.Query)
 		}
+		if !strings.Contains(payload.Query, "labels(first: 100") {
+			t.Fatalf("GraphQL query = %q, want issue labels", payload.Query)
+		}
 		queries = append(queries, payload.Variables.Query)
 
 		switch {
@@ -103,7 +106,13 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 					"author": {"login": "hubot"},
 					"createdAt": "2026-07-20T10:00:00Z",
 					"updatedAt": "2026-07-27T10:00:00Z",
-					"repository": {"nameWithOwner": "acme/rocket"}
+					"repository": {"nameWithOwner": "acme/rocket"},
+					"labels": {
+						"nodes": [
+							{"name": "bug", "color": "d73a4a"},
+							{"name": "priority: high", "color": "b60205"}
+						]
+					}
 				},
 				{
 					"__typename": "Issue",
@@ -128,7 +137,13 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 					"author": {"login": "hubot"},
 					"createdAt": "2026-07-20T10:00:00Z",
 					"updatedAt": "2026-07-27T10:00:00Z",
-					"repository": {"nameWithOwner": "acme/rocket"}
+					"repository": {"nameWithOwner": "acme/rocket"},
+					"labels": {
+						"nodes": [
+							{"name": "bug", "color": "d73a4a"},
+							{"name": "priority: high", "color": "b60205"}
+						]
+					}
 				}
 			]`), nil), nil
 		case strings.Contains(payload.Variables.Query, "mentions:"):
@@ -230,8 +245,16 @@ func TestClientFetchesRelevantOpenItemsAcrossRepositories(t *testing.T) {
 	if got := byURL["https://github.com/octocat/satellite/pull/11"]; !got.IsDraft {
 		t.Fatal("reviewed pull request IsDraft = false, want true")
 	}
-	if got := byURL["https://github.com/acme/rocket/issues/3"]; got.Kind != model.ItemKindIssue {
-		t.Fatalf("issue kind = %q, want issue", got.Kind)
+	issue := byURL["https://github.com/acme/rocket/issues/3"]
+	if issue.Kind != model.ItemKindIssue {
+		t.Fatalf("issue kind = %q, want issue", issue.Kind)
+	}
+	wantLabels := []model.Label{
+		{Name: "bug", Color: "d73a4a"},
+		{Name: "priority: high", Color: "b60205"},
+	}
+	if !slices.Equal(issue.Labels, wantLabels) {
+		t.Fatalf("issue labels = %#v, want %#v", issue.Labels, wantLabels)
 	}
 }
 
