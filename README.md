@@ -6,6 +6,10 @@ assigned to, mentioning, reviewed by, or awaiting review from the active `gh`
 account across repositories, stores an account-scoped cache in SQLite, and
 keeps the UI current through adaptive polling and WebSocket updates.
 
+![GitHub Workbench showing synthetic pull requests and issues](docs/github-workbench-demo.jpg)
+
+The screenshot uses synthetic repositories and work items.
+
 ## Install
 
 Requirements:
