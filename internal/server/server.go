@@ -19,6 +19,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/zoubingwu/gh-workbench/internal/model"
+	"github.com/zoubingwu/gh-workbench/internal/notification"
 	"github.com/zoubingwu/gh-workbench/internal/webui"
 )
 
@@ -189,6 +190,7 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "save notification settings")
 		return
 	}
+	preferences.Supported = notification.Supported
 	writeJSON(w, http.StatusOK, preferences)
 }
 
@@ -286,6 +288,7 @@ func (s *Server) snapshot(ctx context.Context) (model.Snapshot, error) {
 	}
 	snapshot.Host = s.host
 	snapshot.Viewer = s.viewer
+	snapshot.Notifications.Supported = notification.Supported
 	if snapshot.Items == nil {
 		snapshot.Items = make([]model.WorkItem, 0)
 	}

@@ -40,7 +40,7 @@ func TestManagerSendsNewItemsAndActivity(t *testing.T) {
 	}
 	expectedNewItem := Message{
 		Title: "acme/web #42: Add system notifications",
-		Body:  "alice opened a new pull request",
+		Body:  "New relevant pull request from alice",
 	}
 	if len(sender.messages) != 1 || sender.messages[0] != expectedNewItem {
 		t.Fatalf("new item messages = %#v, want %#v", sender.messages, expectedNewItem)

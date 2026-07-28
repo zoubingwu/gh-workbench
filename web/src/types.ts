@@ -58,6 +58,7 @@ export type SyncState = {
 };
 
 export type NotificationPreferences = {
+  supported: boolean;
   enabled: boolean;
   onlyMyPullRequests: boolean;
 };

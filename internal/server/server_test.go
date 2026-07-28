@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/zoubingwu/gh-workbench/internal/model"
+	"github.com/zoubingwu/gh-workbench/internal/notification"
 )
 
 func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
@@ -77,6 +78,13 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 			snapshot.RepositoryCount,
 		)
 	}
+	if snapshot.Notifications.Supported != notification.Supported {
+		t.Fatalf(
+			"notification support = %t, want %t",
+			snapshot.Notifications.Supported,
+			notification.Supported,
+		)
+	}
 
 	request = httptest.NewRequest(http.MethodPost, "/api/sync", nil)
 	request.Host = "127.0.0.1:43123"
@@ -141,6 +149,17 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("save notifications status = %d, want 200", response.Code)
+	}
+	var savedPreferences model.NotificationPreferences
+	if err := json.NewDecoder(response.Body).Decode(&savedPreferences); err != nil {
+		t.Fatalf("decode saved notification preferences: %v", err)
+	}
+	if savedPreferences.Supported != notification.Supported {
+		t.Fatalf(
+			"saved notification support = %t, want %t",
+			savedPreferences.Supported,
+			notification.Supported,
+		)
 	}
 	expectedPreferences := model.NotificationPreferences{Enabled: true}
 	if database.preferences != expectedPreferences {

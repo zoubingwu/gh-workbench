@@ -123,9 +123,9 @@ func messageForChange(
 		return Message{
 			Title: title,
 			Body: fmt.Sprintf(
-				"%s opened a new %s",
-				loginOrGhost(item.Author),
+				"New relevant %s from %s",
 				kind,
+				loginOrGhost(item.Author),
 			),
 		}, true
 	}

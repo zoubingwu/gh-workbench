@@ -125,6 +125,7 @@ type SyncStatus struct {
 }
 
 type NotificationPreferences struct {
+	Supported          bool `json:"supported"`
 	Enabled            bool `json:"enabled"`
 	OnlyMyPullRequests bool `json:"onlyMyPullRequests"`
 }
