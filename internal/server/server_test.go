@@ -136,6 +136,9 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 		t.Fatalf("invalid notification settings status = %d, want 400", response.Code)
 	}
 
+	updates, unsubscribe := server.hub.subscribe()
+	defer unsubscribe()
+
 	request = httptest.NewRequest(
 		http.MethodPut,
 		"/api/notifications",
@@ -154,14 +157,16 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&savedPreferences); err != nil {
 		t.Fatalf("decode saved notification preferences: %v", err)
 	}
-	if savedPreferences.Supported != notification.Supported {
+	expectedPreferences := model.NotificationPreferences{Enabled: true}
+	expectedResponse := expectedPreferences
+	expectedResponse.Supported = notification.Supported
+	if savedPreferences != expectedResponse {
 		t.Fatalf(
-			"saved notification support = %t, want %t",
-			savedPreferences.Supported,
-			notification.Supported,
+			"saved notification response = %#v, want %#v",
+			savedPreferences,
+			expectedResponse,
 		)
 	}
-	expectedPreferences := model.NotificationPreferences{Enabled: true}
 	if database.preferences != expectedPreferences {
 		t.Fatalf(
 			"saved preferences = %#v, want %#v",
@@ -171,6 +176,29 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	}
 	if database.saveCalls != 1 {
 		t.Fatalf("notification preference saves = %d, want 1", database.saveCalls)
+	}
+
+	select {
+	case payload := <-updates:
+		var event struct {
+			Type     string         `json:"type"`
+			Snapshot model.Snapshot `json:"snapshot"`
+		}
+		if err := json.Unmarshal(payload, &event); err != nil {
+			t.Fatalf("decode notification update: %v", err)
+		}
+		if event.Type != "snapshot.updated" {
+			t.Fatalf("notification update type = %q, want snapshot.updated", event.Type)
+		}
+		if event.Snapshot.Notifications != expectedResponse {
+			t.Fatalf(
+				"broadcast notification preferences = %#v, want %#v",
+				event.Snapshot.Notifications,
+				expectedResponse,
+			)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("notification preference update was not broadcast")
 	}
 }
 
@@ -281,6 +309,7 @@ func (f *fakeSnapshotStore) SaveNotificationPreferences(
 	preferences model.NotificationPreferences,
 ) error {
 	f.preferences = preferences
+	f.snapshot.Notifications = preferences
 	f.saveCalls++
 	return nil
 }

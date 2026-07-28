@@ -190,8 +190,12 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "save notification settings")
 		return
 	}
-	preferences.Supported = notification.Supported
-	writeJSON(w, http.StatusOK, preferences)
+	snapshot, err := s.PublishSnapshot(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "publish notification settings")
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot.Notifications)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

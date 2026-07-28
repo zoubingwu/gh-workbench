@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { filterItems, type ItemFilter } from "./filterItems";
 import { formatAbsoluteTime, formatRelativeTime, reactionSymbol } from "./format";
 import type { NotificationPreferences, Reaction, Snapshot, SnapshotEvent, WorkItem } from "./types";
@@ -13,7 +13,6 @@ import {
 type ConnectionState = "connecting" | "connected" | "disconnected";
 
 const SHOW_INACTIVE_STORAGE_KEY = "gh-workbench:show-inactive:v1";
-const ONLY_MY_PULL_REQUESTS_STORAGE_KEY = "gh-workbench:only-my-pull-requests:v1";
 const LABEL_COLOR_PATTERN = /^#?([0-9a-f]{6})$/i;
 const activityVerbs: Readonly<Record<string, string>> = {
   comment: "commented",
@@ -212,7 +211,6 @@ function App() {
   const [requestingSync, setRequestingSync] = useState(false);
   const [savingNotifications, setSavingNotifications] = useState(false);
   const [transportError, setTransportError] = useState<string | null>(null);
-  const legacyPreferenceMigrationStarted = useRef(false);
   const notificationsSupported = snapshot?.notifications.supported ?? false;
   const notificationsEnabled = snapshot?.notifications.enabled ?? false;
   const onlyMyPullRequests = snapshot?.notifications.onlyMyPullRequests ?? true;
@@ -350,66 +348,32 @@ function App() {
     }
   };
 
-  const saveNotificationPreferences = useCallback(
-    async (preferences: Pick<NotificationPreferences, "enabled" | "onlyMyPullRequests">) => {
-      setSavingNotifications(true);
-      setTransportError(null);
-      try {
-        const response = await fetch("/api/notifications", {
-          method: "PUT",
-          credentials: "same-origin",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(preferences),
-        });
-        if (!response.ok) {
-          throw new Error(`Notification settings failed with HTTP ${response.status}`);
-        }
-        const saved = (await response.json()) as NotificationPreferences;
-        setSnapshot((current) => (current ? { ...current, notifications: saved } : current));
-        return true;
-      } catch (error) {
-        setTransportError(errorMessage(error));
-        return false;
-      } finally {
-        setSavingNotifications(false);
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!snapshot || legacyPreferenceMigrationStarted.current) {
-      return;
-    }
-    legacyPreferenceMigrationStarted.current = true;
-
-    let legacyValue: string | null;
+  const saveNotificationPreferences = async (
+    preferences: Pick<NotificationPreferences, "enabled" | "onlyMyPullRequests">,
+  ) => {
+    setSavingNotifications(true);
+    setTransportError(null);
     try {
-      legacyValue = window.localStorage.getItem(ONLY_MY_PULL_REQUESTS_STORAGE_KEY);
-    } catch {
-      return;
-    }
-    if (legacyValue === null) {
-      return;
-    }
-
-    void saveNotificationPreferences({
-      enabled: notificationsEnabled,
-      onlyMyPullRequests: legacyValue !== "false",
-    }).then((saved) => {
-      if (!saved) {
-        return;
+      const response = await fetch("/api/notifications", {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(preferences),
+      });
+      if (!response.ok) {
+        throw new Error(`Notification settings failed with HTTP ${response.status}`);
       }
-      try {
-        window.localStorage.removeItem(ONLY_MY_PULL_REQUESTS_STORAGE_KEY);
-      } catch {
-        // Browser storage can be unavailable in restricted contexts.
-      }
-    });
-  }, [snapshot, notificationsEnabled, saveNotificationPreferences]);
+      const saved = (await response.json()) as NotificationPreferences;
+      setSnapshot((current) => (current ? { ...current, notifications: saved } : current));
+    } catch (error) {
+      setTransportError(errorMessage(error));
+    } finally {
+      setSavingNotifications(false);
+    }
+  };
 
   const updateOnlyMyPullRequests = (nextValue: boolean) =>
     saveNotificationPreferences({
