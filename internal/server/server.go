@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -57,6 +58,8 @@ type Server struct {
 	ui         fs.FS
 	hub        *hub
 	handler    http.Handler
+
+	publicationMu sync.Mutex
 }
 
 func New(
@@ -97,6 +100,15 @@ func (s *Server) SessionPath() string {
 }
 
 func (s *Server) PublishSnapshot(
+	ctx context.Context,
+) (model.Snapshot, error) {
+	s.publicationMu.Lock()
+	defer s.publicationMu.Unlock()
+
+	return s.publishSnapshot(ctx)
+}
+
+func (s *Server) publishSnapshot(
 	ctx context.Context,
 ) (model.Snapshot, error) {
 	snapshot, err := s.snapshot(ctx)
@@ -183,14 +195,18 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid notification settings")
 		return
 	}
+
+	s.publicationMu.Lock()
 	if err := s.store.SaveNotificationPreferences(
 		r.Context(),
 		preferences,
 	); err != nil {
+		s.publicationMu.Unlock()
 		writeError(w, http.StatusInternalServerError, "save notification settings")
 		return
 	}
-	snapshot, err := s.PublishSnapshot(r.Context())
+	snapshot, err := s.publishSnapshot(r.Context())
+	s.publicationMu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "publish notification settings")
 		return

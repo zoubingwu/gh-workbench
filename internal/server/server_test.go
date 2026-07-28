@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -224,6 +225,52 @@ func TestServerRejectsNonLoopbackHost(t *testing.T) {
 	}
 }
 
+func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
+	t.Parallel()
+
+	database := &serializationCheckingStore{}
+	server, err := New(database, &fakeController{}, "github.com", "octocat")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	database.publicationMu = &server.publicationMu
+
+	if _, err := server.PublishSnapshot(t.Context()); err != nil {
+		t.Fatalf("PublishSnapshot() error = %v", err)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/notifications",
+		strings.NewReader(`{"enabled":true,"onlyMyPullRequests":false}`),
+	)
+	request.Host = "127.0.0.1:43123"
+	request.Header.Set("Origin", "http://127.0.0.1:43123")
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{
+		Name:  server.cookieName,
+		Value: server.session,
+	})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("save notifications status = %d, want 200", response.Code)
+	}
+	if database.unserializedCalls != 0 {
+		t.Fatalf(
+			"unserialized store calls = %d, want 0",
+			database.unserializedCalls,
+		)
+	}
+	if database.snapshotCalls != 2 || database.saveCalls != 1 {
+		t.Fatalf(
+			"store calls = %d snapshots, %d saves; want 2 snapshots, 1 save",
+			database.snapshotCalls,
+			database.saveCalls,
+		)
+	}
+}
+
 func TestServerServesEmbeddedIndexWithoutRedirect(t *testing.T) {
 	t.Parallel()
 
@@ -312,6 +359,42 @@ func (f *fakeSnapshotStore) SaveNotificationPreferences(
 	f.snapshot.Notifications = preferences
 	f.saveCalls++
 	return nil
+}
+
+type serializationCheckingStore struct {
+	publicationMu     *sync.Mutex
+	snapshot          model.Snapshot
+	snapshotCalls     int
+	saveCalls         int
+	unserializedCalls int
+}
+
+func (f *serializationCheckingStore) Snapshot(
+	_ context.Context,
+	_ string,
+	_ bool,
+	_ time.Time,
+) (model.Snapshot, error) {
+	f.recordSerialization()
+	f.snapshotCalls++
+	return f.snapshot, nil
+}
+
+func (f *serializationCheckingStore) SaveNotificationPreferences(
+	_ context.Context,
+	preferences model.NotificationPreferences,
+) error {
+	f.recordSerialization()
+	f.snapshot.Notifications = preferences
+	f.saveCalls++
+	return nil
+}
+
+func (f *serializationCheckingStore) recordSerialization() {
+	if f.publicationMu.TryLock() {
+		f.unserializedCalls++
+		f.publicationMu.Unlock()
+	}
 }
 
 type fakeController struct {
