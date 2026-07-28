@@ -498,6 +498,20 @@ h1 {
   font-weight: 600;
 }
 
+.latest-activity {
+  display: inline-flex;
+  flex: 1 1 280px;
+  min-width: 0;
+  gap: 5px;
+}
+
+.latest-activity-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .reactions {
   display: flex;
   flex-wrap: wrap;
@@ -614,6 +628,10 @@ h1 {
     display: flex;
     margin-top: 4px;
     margin-left: 0;
+  }
+
+  .latest-activity {
+    flex-basis: 100%;
   }
 }
 

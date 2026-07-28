@@ -20,6 +20,7 @@ const item: WorkItem = {
   additions: 12,
   deletions: 3,
   labels: [],
+  latestActivity: null,
   reactions: [],
   poll: {
     intervalSeconds: 60,
@@ -39,6 +40,28 @@ describe("WorkItemRow", () => {
     expect(markup).toContain(`href="${item.url}"`);
     expect(markup).toContain('target="_blank"');
     expect(markup).toContain('rel="noopener noreferrer"');
+    expect(markup.match(/<a\b/g)).toHaveLength(1);
+  });
+
+  it("renders the latest activity after the updated time", () => {
+    const markup = renderToStaticMarkup(
+      <WorkItemRow
+        item={{
+          ...item,
+          latestActivity: {
+            kind: "comment",
+            actor: "alice",
+            bodyText: "Please cover the retry case.",
+            occurredAt: "2026-07-28T00:05:00Z",
+            url: "https://github.com/acme/web/pull/42#issuecomment-1",
+          },
+        }}
+        now={Date.parse("2026-07-28T00:05:00Z")}
+      />,
+    );
+
+    expect(markup).toContain("alice commented: Please cover the retry case.");
+    expect(markup.indexOf("updated")).toBeLessThan(markup.indexOf("alice commented"));
     expect(markup.match(/<a\b/g)).toHaveLength(1);
   });
 

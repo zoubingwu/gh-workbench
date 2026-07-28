@@ -12,6 +12,14 @@ export type Label = {
   color: string;
 };
 
+export type Activity = {
+  kind: string;
+  actor: string;
+  bodyText: string;
+  occurredAt: string;
+  url: string;
+};
+
 export type PollState = {
   intervalSeconds: number;
   nextPollAt: string;
@@ -38,6 +46,7 @@ export type WorkItem = {
   additions: number;
   deletions: number;
   labels: Label[];
+  latestActivity: Activity | null;
   reactions: Reaction[];
   poll: PollState;
 };

@@ -15,6 +15,21 @@ type ConnectionState = "connecting" | "connected" | "disconnected";
 const SHOW_INACTIVE_STORAGE_KEY = "gh-workbench:show-inactive:v1";
 const ONLY_MY_PULL_REQUESTS_STORAGE_KEY = "gh-workbench:only-my-pull-requests:v1";
 const LABEL_COLOR_PATTERN = /^#?([0-9a-f]{6})$/i;
+const activityVerbs: Readonly<Record<string, string>> = {
+  comment: "commented",
+  review_comment: "left a review comment",
+  review_approved: "approved",
+  review_changes_requested: "requested changes",
+  review_commented: "reviewed",
+  review_dismissed: "dismissed a review",
+  labeled: "labeled",
+  unlabeled: "removed label",
+  reopened: "reopened",
+  review_requested: "requested review",
+  review_request_removed: "removed review request",
+  ready_for_review: "marked ready for review",
+  converted_to_draft: "converted to draft",
+};
 
 const filterLabels: Readonly<Record<ItemFilter, string>> = {
   all: "All",
@@ -43,6 +58,10 @@ function websocketURL(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected request error";
+}
+
+function activityVerb(kind: string): string {
+  return activityVerbs[kind] ?? "updated";
 }
 
 function groupedReactions(reactions: readonly Reaction[]) {
@@ -148,6 +167,18 @@ export function WorkItemRow({ item, now }: { item: WorkItem; now: number }) {
           <time dateTime={item.updatedAt} title={formatAbsoluteTime(item.updatedAt)}>
             updated {formatRelativeTime(item.updatedAt)}
           </time>
+          {item.latestActivity ? (
+            <span className="latest-activity">
+              <span aria-hidden="true">·</span>
+              <span
+                className="latest-activity-text"
+                title={formatAbsoluteTime(item.latestActivity.occurredAt)}
+              >
+                {item.latestActivity.actor || "ghost"} {activityVerb(item.latestActivity.kind)}
+                {item.latestActivity.bodyText ? `: ${item.latestActivity.bodyText}` : ""}
+              </span>
+            </span>
+          ) : null}
         </div>
 
         {reactions.length > 0 ? (
