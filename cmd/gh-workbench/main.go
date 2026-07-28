@@ -35,8 +35,34 @@ func run(
 	stdout io.Writer,
 	stderr io.Writer,
 ) error {
-	var options app.Options
-	var showVersion bool
+	options, showVersion, err := parseArguments(arguments, stderr)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if showVersion {
+		_, err := fmt.Fprintf(stdout, "gh-workbench %s\n", version)
+		return err
+	}
+
+	options.Stdin = os.Stdin
+	options.Stdout = stdout
+	options.Stderr = stderr
+
+	return app.Run(ctx, options)
+}
+
+func parseArguments(
+	arguments []string,
+	stderr io.Writer,
+) (app.Options, bool, error) {
+	var (
+		options     app.Options
+		showVersion bool
+		uiValue     = string(app.UIBrowser)
+	)
 	flags := flag.NewFlagSet("gh-workbench", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(
@@ -51,6 +77,12 @@ func run(
 		false,
 		"print the authenticated local URL instead of opening a browser",
 	)
+	flags.StringVar(
+		&uiValue,
+		"ui",
+		uiValue,
+		"user interface: browser or tui",
+	)
 	flags.BoolVar(
 		&showVersion,
 		"version",
@@ -58,19 +90,14 @@ func run(
 		"print the build version",
 	)
 	if err := flags.Parse(arguments); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
+		return app.Options{}, false, err
 	}
 
-	if showVersion {
-		_, err := fmt.Fprintf(stdout, "gh-workbench %s\n", version)
-		return err
+	ui, err := app.ParseUI(uiValue)
+	if err != nil {
+		return app.Options{}, false, err
 	}
+	options.UI = ui
 
-	options.Stdout = stdout
-	options.Stderr = stderr
-
-	return app.Run(ctx, options)
+	return options, showVersion, nil
 }

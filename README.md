@@ -1,10 +1,10 @@
 # GitHub Workbench
 
-GitHub Workbench is a local browser workbench for GitHub issues and pull
-requests. It runs as a GitHub CLI extension, finds open work authored by,
-assigned to, mentioning, reviewed by, or awaiting review from the active `gh`
-account across repositories, stores an account-scoped cache in SQLite, and
-keeps the UI current through adaptive polling and WebSocket updates.
+GitHub Workbench is a local workbench for GitHub issues and pull requests with
+browser and terminal interfaces. It runs as a GitHub CLI extension, finds open
+work authored by, assigned to, mentioning, reviewed by, or awaiting review from
+the active `gh` account across repositories, stores an account-scoped cache in
+SQLite, and keeps the selected UI current through adaptive polling.
 
 ![GitHub Workbench showing synthetic pull requests and issues](docs/github-workbench-demo.jpg)
 
@@ -28,6 +28,36 @@ GitHub Workbench starts a loopback service and opens its browser UI. The
 extension includes the Go service, SQLite driver, and frontend assets in one
 platform-specific executable.
 
+Use the terminal interface with:
+
+```sh
+gh workbench --ui tui
+```
+
+TUI mode requires interactive standard input and output.
+
+Browser mode remains the default. It also supports printing the authenticated
+local URL for manual opening:
+
+```sh
+gh workbench --ui browser --no-browser
+```
+
+The terminal interface groups work by repository and shows the same account,
+sync, filter, pull request, issue, activity, reaction, and polling information
+as the browser work list. It accepts these keys:
+
+| Key | Action |
+| --- | --- |
+| `j`, `down`, `k`, `up` | Move the selection |
+| `pgdown`, `pgup` | Move by one visible page |
+| `1`, `2`, `3` | Show all items, pull requests, or issues |
+| `m` | Toggle pull requests authored by the active account |
+| `i` | Toggle inactive items |
+| `r` | Sync now |
+| `enter`, `o` | Open the selected work item |
+| `q`, `ctrl+c` | Exit |
+
 Upgrade or remove the extension with:
 
 ```sh
@@ -41,8 +71,9 @@ GitHub Workbench reads the active account token from the GitHub CLI keyring and
 sends API requests directly to the selected GitHub host. Token environment
 variables are excluded from credential selection.
 
-The HTTP service listens on a random `127.0.0.1` port and protects each process
-with a random session token. Account-scoped SQLite files live under the
+In browser mode, the HTTP service listens on a random `127.0.0.1` port and
+protects each process with a random session token. TUI mode reads snapshots
+directly from the account-scoped SQLite store. SQLite files live under the
 operating system's user cache directory in `gh-workbench`. The cache contains
 repository, issue, pull request, reaction, review, and latest-activity data.
 GitHub Workbench sends no telemetry.

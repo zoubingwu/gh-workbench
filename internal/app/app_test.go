@@ -1,8 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -74,5 +76,17 @@ func TestDatabaseFilenameIsScopedByAccount(t *testing.T) {
 	}
 	if first != databaseFilename("github.com", "octocat") {
 		t.Fatalf("database filename is unstable: %q", first)
+	}
+}
+
+func TestValidateTUIStreamsRejectsNonTerminalStreams(t *testing.T) {
+	t.Parallel()
+
+	err := validateTUIStreams(&bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("validateTUIStreams() error = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "interactive terminal") {
+		t.Fatalf("validateTUIStreams() error = %q", err)
 	}
 }

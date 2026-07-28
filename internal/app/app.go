@@ -18,9 +18,12 @@ import (
 	"github.com/cli/go-gh/v2/pkg/auth"
 	"github.com/cli/go-gh/v2/pkg/browser"
 	"github.com/zoubingwu/gh-workbench/internal/github"
+	"github.com/zoubingwu/gh-workbench/internal/model"
 	"github.com/zoubingwu/gh-workbench/internal/server"
 	"github.com/zoubingwu/gh-workbench/internal/store"
 	"github.com/zoubingwu/gh-workbench/internal/syncer"
+	"github.com/zoubingwu/gh-workbench/internal/tui"
+	"golang.org/x/term"
 )
 
 const (
@@ -30,19 +33,60 @@ const (
 	workerCount    = 4
 )
 
+type UI string
+
+const (
+	UIBrowser UI = "browser"
+	UITUI     UI = "tui"
+)
+
+func ParseUI(value string) (UI, error) {
+	ui := UI(value)
+	switch ui {
+	case UIBrowser, UITUI:
+		return ui, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid ui %q; expected browser or tui",
+			value,
+		)
+	}
+}
+
 type Options struct {
 	DataDir   string
 	NoBrowser bool
+	UI        UI
+	Stdin     io.Reader
 	Stdout    io.Writer
 	Stderr    io.Writer
 }
 
 func Run(ctx context.Context, options Options) error {
+	if options.Stdin == nil {
+		options.Stdin = os.Stdin
+	}
 	if options.Stdout == nil {
 		options.Stdout = os.Stdout
 	}
 	if options.Stderr == nil {
 		options.Stderr = os.Stderr
+	}
+	if options.UI == "" {
+		options.UI = UIBrowser
+	}
+	if _, err := ParseUI(string(options.UI)); err != nil {
+		return err
+	}
+	if options.NoBrowser && options.UI == UITUI {
+		return fmt.Errorf(
+			"--no-browser and --ui tui cannot be used together",
+		)
+	}
+	if options.UI == UITUI {
+		if err := validateTUIStreams(options.Stdin, options.Stdout); err != nil {
+			return err
+		}
 	}
 
 	host, _ := auth.DefaultHost()
@@ -92,13 +136,6 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("listen on loopback: %w", err)
-	}
-	defer listener.Close()
-
-	var localServer *server.Server
 	snapshotUpdates := make(chan struct{}, 1)
 	runner := syncer.New(database, githubClient, host, viewer, workerCount, func() {
 		select {
@@ -106,7 +143,25 @@ func Run(ctx context.Context, options Options) error {
 		default:
 		}
 	})
-	localServer, err = server.New(database, runner, host, viewer)
+	if options.UI == UITUI {
+		return runTerminalUI(
+			ctx,
+			options,
+			database,
+			runner,
+			snapshotUpdates,
+			host,
+			viewer,
+		)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("listen on loopback: %w", err)
+	}
+	defer listener.Close()
+
+	localServer, err := server.New(database, runner, host, viewer)
 	if err != nil {
 		return err
 	}
@@ -193,6 +248,114 @@ func Run(ctx context.Context, options Options) error {
 		}
 	}
 	return runErr
+}
+
+type terminalSnapshotSource struct {
+	database *store.Store
+	runner   *syncer.Runner
+	host     string
+	viewer   string
+}
+
+func (s terminalSnapshotSource) Snapshot(
+	ctx context.Context,
+) (model.Snapshot, error) {
+	snapshot, err := s.database.Snapshot(
+		ctx,
+		s.host,
+		s.runner.Running(),
+		time.Now().UTC(),
+	)
+	if err != nil {
+		return model.Snapshot{}, err
+	}
+	snapshot.Viewer = s.viewer
+	return snapshot, nil
+}
+
+func runTerminalUI(
+	ctx context.Context,
+	options Options,
+	database *store.Store,
+	runner *syncer.Runner,
+	snapshotUpdates <-chan struct{},
+	host string,
+	viewer string,
+) error {
+	runContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	launcher := browser.New("", io.Discard, io.Discard)
+	results := make(chan error, 2)
+	go func() {
+		results <- runner.Run(runContext)
+	}()
+	go func() {
+		results <- tui.Run(runContext, tui.Options{
+			Source: terminalSnapshotSource{
+				database: database,
+				runner:   runner,
+				host:     host,
+				viewer:   viewer,
+			},
+			Updates: snapshotUpdates,
+			Trigger: runner.Trigger,
+			OpenURL: launcher.Browse,
+			Input:   options.Stdin,
+			Output:  options.Stdout,
+		})
+	}()
+
+	var runErr error
+	received := 0
+	select {
+	case <-ctx.Done():
+	case runErr = <-results:
+		received = 1
+	}
+
+	cancel()
+	shutdownContext, shutdownCancel := context.WithTimeout(
+		context.Background(),
+		shutdownPeriod,
+	)
+	defer shutdownCancel()
+	for received < 2 {
+		select {
+		case err := <-results:
+			received++
+			if err != nil && runErr == nil {
+				runErr = err
+			}
+		case <-shutdownContext.Done():
+			if runErr == nil {
+				runErr = fmt.Errorf(
+					"stop GitHub Workbench: %w",
+					shutdownContext.Err(),
+				)
+			}
+			return runErr
+		}
+	}
+	return runErr
+}
+
+type fileDescriptor interface {
+	Fd() uintptr
+}
+
+func validateTUIStreams(input io.Reader, output io.Writer) error {
+	inputFile, inputOK := input.(fileDescriptor)
+	outputFile, outputOK := output.(fileDescriptor)
+	if !inputOK ||
+		!outputOK ||
+		!term.IsTerminal(int(inputFile.Fd())) ||
+		!term.IsTerminal(int(outputFile.Fd())) {
+		return fmt.Errorf(
+			"--ui tui requires an interactive terminal on stdin and stdout",
+		)
+	}
+	return nil
 }
 
 func publishSnapshots(

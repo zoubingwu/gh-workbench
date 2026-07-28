@@ -1,0 +1,687 @@
+package tui
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/zoubingwu/gh-workbench/internal/model"
+)
+
+func TestModelUsesBrowserViewDefaults(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Host:            "github.com",
+			Viewer:          "alice",
+			RepositoryCount: 3,
+			GeneratedAt:     now,
+			Items: []model.WorkItem{
+				workItem("acme/api", 3, model.ItemKindPullRequest, "alice", now),
+				workItem("acme/docs", 8, model.ItemKindIssue, "bob", now),
+				workItem("acme/api", 2, model.ItemKindPullRequest, "bob", now),
+				workItem(
+					"acme/old",
+					1,
+					model.ItemKindIssue,
+					"alice",
+					now.Add(-31*24*time.Hour),
+				),
+			},
+		},
+	})
+
+	items := current.visibleItems()
+	if got, want := len(items), 2; got != want {
+		t.Fatalf("visible items = %d, want %d", got, want)
+	}
+	if items[0].Number != 3 || items[1].Number != 8 {
+		t.Fatalf("visible item numbers = [%d %d], want [3 8]",
+			items[0].Number,
+			items[1].Number,
+		)
+	}
+	counts := current.counts()
+	if counts.all != 2 || counts.pullRequests != 1 || counts.issues != 1 {
+		t.Fatalf("counts = %#v, want all=2 pullRequests=1 issues=1", counts)
+	}
+
+	view := current.View().Content
+	for _, value := range []string{
+		"GitHub Workbench",
+		"alice@github.com",
+		"acme/api",
+		"acme/docs",
+		"Only my PRs",
+		"Show inactive",
+	} {
+		if !strings.Contains(view, value) {
+			t.Fatalf("View() missing %q:\n%s", value, view)
+		}
+	}
+	if strings.Contains(view, "acme/old") {
+		t.Fatalf("View() contains inactive repository:\n%s", view)
+	}
+}
+
+func TestModelFiltersAndTogglesItems(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items: []model.WorkItem{
+				workItem("acme/api", 3, model.ItemKindPullRequest, "alice", now),
+				workItem("acme/api", 2, model.ItemKindPullRequest, "bob", now),
+				workItem(
+					"acme/docs",
+					8,
+					model.ItemKindIssue,
+					"bob",
+					now.Add(-31*24*time.Hour),
+				),
+			},
+		},
+	})
+
+	current = updateModel(t, current, keyPress("m"))
+	if got, want := len(current.visibleItems()), 2; got != want {
+		t.Fatalf("visible items after m = %d, want %d", got, want)
+	}
+
+	current = updateModel(t, current, keyPress("i"))
+	if got, want := len(current.visibleItems()), 3; got != want {
+		t.Fatalf("visible items after i = %d, want %d", got, want)
+	}
+
+	current = updateModel(t, current, keyPress("2"))
+	items := current.visibleItems()
+	if got, want := len(items), 2; got != want {
+		t.Fatalf("pull requests = %d, want %d", got, want)
+	}
+	for _, item := range items {
+		if item.Kind != model.ItemKindPullRequest {
+			t.Fatalf("item kind = %q, want pull_request", item.Kind)
+		}
+	}
+}
+
+func TestModelKeepsSelectionAcrossSnapshots(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	first := workItem("acme/api", 1, model.ItemKindIssue, "alice", now)
+	second := workItem("acme/api", 2, model.ItemKindIssue, "alice", now)
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items:       []model.WorkItem{first, second},
+		},
+	})
+	current = updateModel(t, current, keyPress("j"))
+	if selected, ok := current.selectedItem(); !ok || selected.Number != 2 {
+		t.Fatalf("selected item = %#v, want number 2", selected)
+	}
+
+	third := workItem("acme/api", 3, model.ItemKindIssue, "alice", now)
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items:       []model.WorkItem{third, second, first},
+		},
+	})
+	if selected, ok := current.selectedItem(); !ok || selected.Number != 2 {
+		t.Fatalf("selected item after refresh = %#v, want number 2", selected)
+	}
+}
+
+func TestModelPagesThroughItems(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	items := make([]model.WorkItem, 0, 10)
+	for number := 1; number <= 10; number++ {
+		items = append(items, workItem(
+			"acme/api",
+			number,
+			model.ItemKindIssue,
+			"alice",
+			now,
+		))
+	}
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, tea.WindowSizeMsg{
+		Width:  80,
+		Height: 24,
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items:       items,
+		},
+	})
+	current = updateModel(
+		t,
+		current,
+		tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}),
+	)
+
+	item, ok := current.selectedItem()
+	if !ok || item.Number != current.pageSize()+1 {
+		t.Fatalf(
+			"selected item = %#v, want number %d",
+			item,
+			current.pageSize()+1,
+		)
+	}
+}
+
+func TestModelReloadsSnapshotFromUpdateChannel(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	source := &staticSource{
+		snapshot: model.Snapshot{
+			GeneratedAt: now,
+			Items: []model.WorkItem{
+				workItem("acme/api", 1, model.ItemKindIssue, "alice", now),
+			},
+		},
+	}
+	updates := make(chan struct{}, 1)
+	current := newModel(context.Background(), Options{
+		Source:  source,
+		Updates: updates,
+	}, func() time.Time {
+		return now
+	})
+
+	message := current.Init()()
+	updated, waitCommand := current.Update(message)
+	current = updated.(terminalModel)
+	if waitCommand == nil {
+		t.Fatal("initial wait command = nil")
+	}
+
+	source.snapshot = model.Snapshot{
+		GeneratedAt: now.Add(time.Second),
+		Items: []model.WorkItem{
+			workItem("acme/api", 2, model.ItemKindIssue, "alice", now),
+		},
+	}
+	updates <- struct{}{}
+	message = waitCommand()
+	updated, loadCommand := current.Update(message)
+	current = updated.(terminalModel)
+	if loadCommand == nil {
+		t.Fatal("reload command = nil")
+	}
+	message = loadCommand()
+	updated, waitCommand = current.Update(message)
+	current = updated.(terminalModel)
+	if waitCommand == nil {
+		t.Fatal("next wait command = nil")
+	}
+
+	item, ok := current.selectedItem()
+	if !ok || item.Number != 2 {
+		t.Fatalf("selected item = %#v, want refreshed item 2", item)
+	}
+	if view := current.View().Content; !strings.Contains(view, "#2") {
+		t.Fatalf("View() missing refreshed item:\n%s", view)
+	}
+}
+
+func TestModelShowsSyncAndSnapshotErrors(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			GeneratedAt: now,
+			Sync: model.SyncStatus{
+				Running: true,
+				Error:   "GitHub rate limit",
+			},
+		},
+	})
+	view := current.View().Content
+	if !strings.Contains(view, "Syncing") ||
+		!strings.Contains(view, "GitHub rate limit") {
+		t.Fatalf("View() missing sync state or error:\n%s", view)
+	}
+
+	current = updateModel(t, current, snapshotLoadedMsg{
+		err: errors.New("read cache"),
+	})
+	if view := current.View().Content; !strings.Contains(view, "read cache") {
+		t.Fatalf("View() missing snapshot error:\n%s", view)
+	}
+}
+
+func TestViewFitsTerminalWidth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, tea.WindowSizeMsg{
+		Width:  42,
+		Height: 18,
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Host:            "github.com",
+			Viewer:          "alice",
+			RepositoryCount: 1,
+			GeneratedAt:     now,
+			Items: []model.WorkItem{
+				{
+					Repository: "acme/long-repository-name",
+					Number:     1,
+					Kind:       model.ItemKindPullRequest,
+					Title:      strings.Repeat("long title ", 10),
+					Author:     "alice",
+					UpdatedAt:  now,
+				},
+			},
+		},
+	})
+
+	view := current.View()
+	if !view.AltScreen {
+		t.Fatal("View().AltScreen = false, want true")
+	}
+	for _, line := range strings.Split(view.Content, "\n") {
+		if width := ansi.StringWidth(line); width > 42 {
+			t.Fatalf("line width = %d, want <= 42: %q", width, line)
+		}
+	}
+}
+
+func TestViewFitsTerminalHeight(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	items := make([]model.WorkItem, 0, 10)
+	for number := 1; number <= 10; number++ {
+		items = append(items, workItem(
+			"acme/repository-"+string(rune('a'+number)),
+			number,
+			model.ItemKindIssue,
+			"alice",
+			now,
+		))
+	}
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, tea.WindowSizeMsg{
+		Width:  80,
+		Height: 24,
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Sync: model.SyncStatus{
+				Error: "sync error",
+			},
+			Items: items,
+		},
+	})
+	current.action = "Sync requested"
+
+	lines := strings.Split(current.View().Content, "\n")
+	if len(lines) > 24 {
+		t.Fatalf("view height = %d, want <= 24:\n%s", len(lines), current.View().Content)
+	}
+}
+
+func TestModelQuitKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		message tea.KeyPressMsg
+	}{
+		{
+			name:    "q",
+			message: keyPress("q"),
+		},
+		{
+			name: "control c",
+			message: tea.KeyPressMsg(tea.Key{
+				Code: 'c',
+				Mod:  tea.ModCtrl,
+			}),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			current := newModel(context.Background(), Options{}, time.Now)
+			_, command := current.Update(test.message)
+			if command == nil {
+				t.Fatal("quit command = nil")
+			}
+			message := command()
+			if _, ok := message.(tea.QuitMsg); !ok {
+				t.Fatalf("quit command message = %T, want tea.QuitMsg", message)
+			}
+		})
+	}
+}
+
+func TestWaitForUpdateStopsWithContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	current := newModel(ctx, Options{
+		Updates: make(chan struct{}),
+	}, time.Now)
+	cancel()
+
+	command := current.waitForUpdate()
+	if command == nil {
+		t.Fatal("wait command = nil")
+	}
+	if message := command(); message != nil {
+		t.Fatalf("wait command message = %#v, want nil", message)
+	}
+}
+
+func TestRunReturnsAfterContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := Run(ctx, Options{
+		Source: staticSource{},
+		Input:  strings.NewReader(""),
+		Output: io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+func TestRunRestoresAlternateScreenOnQuitKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "q", input: "q"},
+		{name: "control c", input: "\x03"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			var output bytes.Buffer
+			err := Run(ctx, Options{
+				Source: staticSource{},
+				Input:  strings.NewReader(test.input),
+				Output: &output,
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if !strings.Contains(output.String(), ansi.SetModeAltScreenSaveCursor) {
+				t.Fatalf("output missing alternate-screen entry: %q", output.String())
+			}
+			if !strings.Contains(output.String(), ansi.ResetModeAltScreenSaveCursor) {
+				t.Fatalf("output missing alternate-screen restoration: %q", output.String())
+			}
+		})
+	}
+}
+
+func TestRunRestoresAlternateScreenOnContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	input, inputWriter := io.Pipe()
+	defer inputWriter.Close()
+	output := &cancelOnAltScreenWriter{
+		cancel: cancel,
+	}
+	err := Run(ctx, Options{
+		Source: staticSource{},
+		Input:  input,
+		Output: output,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(output.String(), ansi.SetModeAltScreenSaveCursor) {
+		t.Fatalf("output missing alternate-screen entry: %q", output.String())
+	}
+	if !strings.Contains(output.String(), ansi.ResetModeAltScreenSaveCursor) {
+		t.Fatalf("output missing alternate-screen restoration: %q", output.String())
+	}
+}
+
+func TestTerminalTextRemovesTerminalControlSequences(t *testing.T) {
+	t.Parallel()
+
+	input := "\x1b]52;c;Y29weQ==\x07safe\ntext\x00"
+	if got, want := terminalText(input), "safe text"; got != want {
+		t.Fatalf("terminalText() = %q, want %q", got, want)
+	}
+}
+
+func TestSelectedItemKeepsStructuredDetailsVisible(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	current := newModel(context.Background(), Options{}, func() time.Time {
+		return now
+	})
+	item := workItem(
+		"acme/api",
+		7,
+		model.ItemKindPullRequest,
+		"alice",
+		now,
+	)
+	item.Title = strings.Repeat("long title ", 20)
+	item.ReviewDecision = "APPROVED"
+	item.Additions = 10
+	item.Deletions = 2
+	item.LatestActivity = &model.Activity{
+		Kind:     "comment",
+		Actor:    "bob",
+		BodyText: strings.Repeat("long activity ", 20),
+	}
+	item.Reactions = []model.Reaction{
+		{Content: "eyes"},
+	}
+	item.Poll.Error = "rate limited"
+	current = updateModel(t, current, tea.WindowSizeMsg{
+		Width:  60,
+		Height: 24,
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items:       []model.WorkItem{item},
+		},
+	})
+
+	view := current.View().Content
+	for _, value := range []string{
+		"Status: Approved",
+		"Changes:",
+		"Activity:",
+		"Reactions:",
+		"Polling: rate limited",
+	} {
+		if !strings.Contains(view, value) {
+			t.Fatalf("View() missing %q:\n%s", value, view)
+		}
+	}
+}
+
+func TestModelTriggersSyncAndOpensSelectedItem(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	var (
+		triggered int
+		openedURL string
+	)
+	current := newModel(
+		context.Background(),
+		Options{
+			Source: staticSource{},
+			Trigger: func() {
+				triggered++
+			},
+			OpenURL: func(url string) error {
+				openedURL = url
+				return nil
+			},
+		},
+		func() time.Time {
+			return now
+		},
+	)
+	item := workItem("acme/api", 7, model.ItemKindIssue, "alice", now)
+	item.URL = "https://github.com/acme/api/issues/7"
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Items:       []model.WorkItem{item},
+		},
+	})
+
+	updated, _ := current.Update(keyPress("r"))
+	current = updated.(terminalModel)
+	if triggered != 1 {
+		t.Fatalf("trigger count = %d, want 1", triggered)
+	}
+
+	updated, command := current.Update(keyPress("enter"))
+	current = updated.(terminalModel)
+	if command == nil {
+		t.Fatal("open command = nil")
+	}
+	message := command()
+	current = updateModel(t, current, message)
+	if openedURL != item.URL {
+		t.Fatalf("opened URL = %q, want %q", openedURL, item.URL)
+	}
+	if !strings.Contains(current.action, "Opened") {
+		t.Fatalf("action = %q, want open confirmation", current.action)
+	}
+}
+
+type staticSource struct {
+	snapshot model.Snapshot
+	err      error
+}
+
+type cancelOnAltScreenWriter struct {
+	mu     sync.Mutex
+	once   sync.Once
+	buffer bytes.Buffer
+	cancel context.CancelFunc
+}
+
+func (w *cancelOnAltScreenWriter) Write(value []byte) (int, error) {
+	w.mu.Lock()
+	written, err := w.buffer.Write(value)
+	enteredAltScreen := strings.Contains(
+		w.buffer.String(),
+		ansi.SetModeAltScreenSaveCursor,
+	)
+	w.mu.Unlock()
+	if enteredAltScreen {
+		w.once.Do(w.cancel)
+	}
+	return written, err
+}
+
+func (w *cancelOnAltScreenWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.String()
+}
+
+func (s staticSource) Snapshot(context.Context) (model.Snapshot, error) {
+	return s.snapshot, s.err
+}
+
+func updateModel(t *testing.T, current terminalModel, message tea.Msg) terminalModel {
+	t.Helper()
+
+	updated, _ := current.Update(message)
+	return updated.(terminalModel)
+}
+
+func keyPress(value string) tea.KeyPressMsg {
+	if value == "enter" {
+		return tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+	}
+	runes := []rune(value)
+	return tea.KeyPressMsg(tea.Key{
+		Text: value,
+		Code: runes[0],
+	})
+}
+
+func workItem(
+	repository string,
+	number int,
+	kind model.ItemKind,
+	author string,
+	updatedAt time.Time,
+) model.WorkItem {
+	return model.WorkItem{
+		Repository: repository,
+		Number:     number,
+		Kind:       kind,
+		Title:      "Work item",
+		URL:        "https://github.com/" + repository,
+		Author:     author,
+		UpdatedAt:  updatedAt,
+	}
+}
