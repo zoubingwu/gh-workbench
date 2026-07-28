@@ -6,6 +6,52 @@ assigned to, mentioning, reviewed by, or awaiting review from the active `gh`
 account across repositories, stores an account-scoped cache in SQLite, and
 keeps the UI current through adaptive polling and WebSocket updates.
 
+## Install
+
+Requirements:
+
+- A current GitHub CLI release
+- An active account stored by `gh auth login` in the operating system's secure
+  credential store
+
+```sh
+gh auth login
+gh extension install zoubingwu/gh-workbench
+gh workbench
+```
+
+GitHub Workbench starts a loopback service and opens its browser UI. The
+extension includes the Go service, SQLite driver, and frontend assets in one
+platform-specific executable.
+
+Upgrade or remove the extension with:
+
+```sh
+gh extension upgrade workbench
+gh extension remove workbench
+```
+
+## Local data and security
+
+GitHub Workbench reads the active account token from the GitHub CLI keyring and
+sends API requests directly to the selected GitHub host. Token environment
+variables are excluded from credential selection.
+
+The HTTP service listens on a random `127.0.0.1` port and protects each process
+with a random session token. Account-scoped SQLite files live under the
+operating system's user cache directory in `gh-workbench`. The cache contains
+repository, issue, pull request, reaction, review, and latest-activity data.
+GitHub Workbench sends no telemetry.
+
+On Linux, configure a Secret Service-compatible keyring before running
+`gh auth login`.
+
+Removing the extension preserves its cache. Delete the `gh-workbench` directory
+under the operating system's user cache directory to clear all local data.
+
+Third-party license and attribution texts are available in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and as a release asset.
+
 ## Development
 
 Requirements:
