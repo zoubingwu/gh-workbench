@@ -1018,9 +1018,9 @@ func TestClientFetchLatestActivitiesUsesNewestInlineReviewComment(t *testing.T) 
 			if request.URL.RawQuery != wantQuery {
 				t.Fatalf("review comment query = %q, want %q", request.URL.RawQuery, wantQuery)
 			}
-			if request.Header.Get("If-None-Match") != `"inline-v1"` {
+			if request.Header.Get("If-None-Match") != "" {
 				t.Fatalf(
-					"If-None-Match = %q, want inline-v1",
+					"If-None-Match = %q, want empty for a legacy raw cache",
 					request.Header.Get("If-None-Match"),
 				)
 			}
@@ -1054,12 +1054,15 @@ func TestClientFetchLatestActivitiesUsesNewestInlineReviewComment(t *testing.T) 
 	client.gate.interval = 0
 
 	results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
-		NodeID:              "PR_rocket_7",
-		Repository:          model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
-		Number:              7,
-		Kind:                model.ItemKindPullRequest,
-		LatestReviewComment: &model.Activity{Kind: "review_comment"},
-		ETag:                `"inline-v1"`,
+		NodeID:     "PR_rocket_7",
+		Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:     7,
+		Kind:       model.ItemKindPullRequest,
+		LatestReviewComment: &model.Activity{
+			Kind:     "review_comment",
+			BodyText: "**cached raw Markdown**",
+		},
+		ETag: `"inline-v1"`,
 	}})
 	if err != nil {
 		t.Fatalf("FetchLatestActivities() error = %v", err)
@@ -1075,8 +1078,8 @@ func TestClientFetchLatestActivitiesUsesNewestInlineReviewComment(t *testing.T) 
 		*results[0].Activity != *want {
 		t.Fatalf("latest activity = %#v, want %#v", results, want)
 	}
-	if results[0].ETag != `"inline-v2"` {
-		t.Fatalf("activity ETag = %q, want inline-v2", results[0].ETag)
+	if results[0].ETag != `text-v1:"inline-v2"` {
+		t.Fatalf("activity ETag = %q, want versioned inline-v2", results[0].ETag)
 	}
 	if results[0].LatestReviewComment == nil ||
 		*results[0].LatestReviewComment != *want {
@@ -1255,7 +1258,7 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 				Number:              7,
 				Kind:                model.ItemKindPullRequest,
 				LatestReviewComment: test.reviewComment,
-				ETag:                `"inline-v1"`,
+				ETag:                `text-v1:"inline-v1"`,
 			}})
 			if err != nil {
 				t.Fatalf("FetchLatestActivities() error = %v", err)
@@ -1264,8 +1267,8 @@ func TestClientFetchLatestActivitiesReusesInlineCommentOnNotModified(t *testing.
 				*results[0].Activity != *test.expected {
 				t.Fatalf("latest activity = %#v, want %#v", results, test.expected)
 			}
-			if results[0].ETag != `"inline-v1"` {
-				t.Fatalf("activity ETag = %q, want inline-v1", results[0].ETag)
+			if results[0].ETag != `text-v1:"inline-v1"` {
+				t.Fatalf("activity ETag = %q, want versioned inline-v1", results[0].ETag)
 			}
 			if results[0].LatestReviewComment == nil ||
 				*results[0].LatestReviewComment != *test.reviewComment {

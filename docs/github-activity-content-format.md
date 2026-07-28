@@ -47,6 +47,14 @@ falls back to `body`. The default REST representation supplies raw Markdown in
 4. Add a client test that verifies the text media type and proves raw badge
    Markdown never reaches `Activity.BodyText`.
 
+## Cache compatibility
+
+The persisted ETag is representation-specific. Prefix text-representation
+ETags with `text-v1:` in SQLite and strip the prefix before sending
+`If-None-Match`. An unversioned ETag belongs to the earlier raw representation,
+so the first text request omits it and refreshes both the body and ETag. Later
+polls resume conditional requests with the versioned cache.
+
 GitHub guarantees a text representation, not a natural-language summary.
 Code, image alternative text, table contents, and other meaningful symbols
 may remain. Keep those in the first implementation. Add targeted cleanup only

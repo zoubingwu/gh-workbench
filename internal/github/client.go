@@ -19,13 +19,14 @@ import (
 )
 
 const (
-	githubAPIVersion  = "2022-11-28"
-	maxErrorBody      = 4 << 10
-	pageSize          = 100
-	maxSearchPages    = 10
-	activityBatchSize = 50
-	maxActivityRunes  = 160
-	requestInterval   = time.Second
+	githubAPIVersion        = "2022-11-28"
+	maxErrorBody            = 4 << 10
+	pageSize                = 100
+	maxSearchPages          = 10
+	activityBatchSize       = 50
+	maxActivityRunes        = 160
+	requestInterval         = time.Second
+	reviewCommentETagPrefix = "text-v1:"
 )
 
 type Client struct {
@@ -565,6 +566,13 @@ func (c *Client) fetchLatestReviewComment(
 	query.Set("direction", "desc")
 	query.Set("per_page", "1")
 	endpoint.RawQuery = query.Encode()
+	requestETag, currentRepresentation := strings.CutPrefix(
+		etag,
+		reviewCommentETagPrefix,
+	)
+	if !currentRepresentation {
+		requestETag = ""
+	}
 
 	request, err := http.NewRequestWithContext(
 		ctx,
@@ -578,17 +586,20 @@ func (c *Client) fetchLatestReviewComment(
 	request.Header.Set("Accept", "application/vnd.github-commitcomment.text+json")
 	request.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
 	request.Header.Set("User-Agent", "gh-workbench")
-	if etag != "" {
-		request.Header.Set("If-None-Match", etag)
+	if requestETag != "" {
+		request.Header.Set("If-None-Match", requestETag)
 	}
 
 	response, err := c.do(request)
 	if err != nil {
 		return nil, etag, false, fmt.Errorf("send GitHub request: %w", err)
 	}
-	responseETag := etag
+	responseETag := ""
+	if requestETag != "" {
+		responseETag = reviewCommentETagPrefix + requestETag
+	}
 	if currentETag := response.Header.Get("ETag"); currentETag != "" {
-		responseETag = currentETag
+		responseETag = reviewCommentETagPrefix + currentETag
 	}
 	if response.StatusCode == http.StatusNotModified {
 		_ = response.Body.Close()
