@@ -287,7 +287,7 @@ func TestModelShowsSyncAndSnapshotErrors(t *testing.T) {
 	}
 }
 
-func TestViewFitsTerminalWidth(t *testing.T) {
+func TestViewFitsTerminalWidthAndKeepsReactionSummary(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -312,6 +312,18 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 					Title:      strings.Repeat("long title ", 10),
 					Author:     "alice",
 					UpdatedAt:  now,
+					Additions:  123,
+					Deletions:  45,
+					LocalAgentActivity: &model.LocalAgentActivity{
+						State:      model.LocalAgentStateWorking,
+						Providers:  []string{"claude", "codex"},
+						Confidence: model.LocalAgentConfidenceSupported,
+					},
+					Reactions: []model.Reaction{
+						{Content: "eyes"},
+						{Content: "+1"},
+						{Content: "heart"},
+					},
 				},
 			},
 		},
@@ -325,6 +337,22 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 		if width := ansi.StringWidth(line); width > 42 {
 			t.Fatalf("line width = %d, want <= 42: %q", width, line)
 		}
+	}
+	lines := strings.Split(ansi.Strip(view.Content), "\n")
+	summary := "👀 1 👍 1 ♥ 1"
+	titleLine := lines[lineContaining(t, lines, summary)]
+	if !strings.HasPrefix(titleLine, "▌") {
+		t.Fatalf("narrow title line missing selection rail: %q", titleLine)
+	}
+	if changesAndReactions := "+123 -45  ·  " + summary; !strings.Contains(
+		titleLine,
+		changesAndReactions,
+	) {
+		t.Fatalf(
+			"narrow title line missing %q: %q",
+			changesAndReactions,
+			titleLine,
+		)
 	}
 }
 
