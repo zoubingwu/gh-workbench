@@ -14,6 +14,7 @@ const sendTimeout = 5 * time.Second
 
 var activityVerbs = map[string]string{
 	"comment":                  "commented",
+	"commit":                   "committed",
 	"review_comment":           "left a review comment",
 	"review_approved":          "approved",
 	"review_changes_requested": "requested changes",
@@ -68,6 +69,12 @@ func (m *Manager) Seed(items []model.WorkItem) {
 		key := itemKey(item)
 		previous, exists := m.cursors[key]
 		current := nextActivityCursor(item, previous, exists)
+		// Cached PR updates form the silent baseline until the commit cursor is hydrated.
+		if item.Kind == model.ItemKindPullRequest &&
+			item.LatestCommit == nil &&
+			!item.UpdatedAt.Before(current.occurredAt) {
+			current = activityCursor{occurredAt: item.UpdatedAt}
+		}
 		if !exists || current.advances(previous) {
 			m.cursors[key] = current
 		}

@@ -15,7 +15,7 @@ const reactionSymbols: Readonly<Record<string, string>> = {
   rocket: "🚀",
 };
 
-export function formatRelativeTime(value: string | null): string {
+export function formatRelativeTime(value: string | null, referenceTime = Date.now()): string {
   if (!value) {
     return "never";
   }
@@ -25,7 +25,7 @@ export function formatRelativeTime(value: string | null): string {
     return "unknown";
   }
 
-  const elapsedSeconds = Math.round((timestamp - Date.now()) / 1_000);
+  const elapsedSeconds = Math.round((timestamp - referenceTime) / 1_000);
   if (Math.abs(elapsedSeconds) < 60) {
     return relativeTime.format(elapsedSeconds, "second");
   }

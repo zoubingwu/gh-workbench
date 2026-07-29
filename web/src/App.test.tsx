@@ -34,7 +34,11 @@ const item: WorkItem = {
 describe("WorkItemRow", () => {
   it("renders the whole row as one native GitHub link", () => {
     const markup = renderToStaticMarkup(
-      <WorkItemRow item={item} now={Date.parse("2026-07-28T00:00:00Z")} />,
+      <WorkItemRow
+        item={item}
+        now={Date.parse("2026-07-28T00:00:00Z")}
+        displayTime={Date.parse("2026-07-28T00:00:00Z")}
+      />,
     );
 
     expect(markup).toContain(`href="${item.url}"`);
@@ -56,13 +60,66 @@ describe("WorkItemRow", () => {
             url: "https://github.com/acme/web/pull/42#issuecomment-1",
           },
         }}
-        now={Date.parse("2026-07-28T00:05:00Z")}
+        now={Date.parse("2026-07-28T00:20:00Z")}
+        displayTime={Date.parse("2026-07-28T00:20:00Z")}
       />,
     );
 
-    expect(markup).toContain("alice commented: Please cover the retry case.");
+    expect(markup).toContain("alice commented ");
+    expect(markup).toContain(">15 minutes ago</time>: Please cover the retry case.");
+    expect(markup).toContain('dateTime="2026-07-28T00:05:00Z"');
     expect(markup.indexOf("updated")).toBeLessThan(markup.indexOf("alice commented"));
     expect(markup.match(/<a\b/g)).toHaveLength(1);
+  });
+
+  it("renders a pull request commit as timed activity", () => {
+    const markup = renderToStaticMarkup(
+      <WorkItemRow
+        item={{
+          ...item,
+          latestActivity: {
+            kind: "commit",
+            actor: "alice",
+            bodyText: "abc1234 Cover the retry case",
+            occurredAt: "2026-07-28T00:17:00Z",
+            url: "https://github.com/acme/web/pull/42/commits/abc1234",
+          },
+        }}
+        now={Date.parse("2026-07-28T00:20:00Z")}
+        displayTime={Date.parse("2026-07-28T00:20:00Z")}
+      />,
+    );
+
+    expect(markup).toContain("alice committed ");
+    expect(markup).toContain(">3 minutes ago</time>: abc1234 Cover the retry case");
+  });
+
+  it("uses the newest display or snapshot time for relative labels", () => {
+    const timedItem: WorkItem = {
+      ...item,
+      latestActivity: {
+        kind: "comment",
+        actor: "alice",
+        bodyText: "",
+        occurredAt: item.updatedAt,
+        url: "https://github.com/acme/web/pull/42#issuecomment-1",
+      },
+    };
+    const snapshotTime = Date.parse(item.updatedAt);
+
+    const initialMarkup = renderToStaticMarkup(
+      <WorkItemRow item={timedItem} now={snapshotTime} displayTime={snapshotTime} />,
+    );
+    const laterMarkup = renderToStaticMarkup(
+      <WorkItemRow item={timedItem} now={snapshotTime} displayTime={snapshotTime + 2 * 60_000} />,
+    );
+    const refreshedMarkup = renderToStaticMarkup(
+      <WorkItemRow item={timedItem} now={snapshotTime} displayTime={snapshotTime - 30_000} />,
+    );
+
+    expect(initialMarkup.match(/\bnow<\/time>/g)).toHaveLength(2);
+    expect(laterMarkup.match(/\b2 minutes ago<\/time>/g)).toHaveLength(2);
+    expect(refreshedMarkup.match(/\bnow<\/time>/g)).toHaveLength(2);
   });
 
   it("omits the redundant open status badge for issues", () => {
@@ -75,6 +132,7 @@ describe("WorkItemRow", () => {
           url: "https://github.com/acme/web/issues/42",
         }}
         now={Date.parse("2026-07-28T00:00:00Z")}
+        displayTime={Date.parse("2026-07-28T00:00:00Z")}
       />,
     );
 
@@ -96,6 +154,7 @@ describe("WorkItemRow", () => {
           ],
         }}
         now={Date.parse("2026-07-28T00:00:00Z")}
+        displayTime={Date.parse("2026-07-28T00:00:00Z")}
       />,
     );
 
@@ -116,6 +175,7 @@ describe("WorkItemRow", () => {
           labels: [{ name: "bug", color: "d73a4a" }],
         }}
         now={Date.parse("2026-07-28T00:00:00Z")}
+        displayTime={Date.parse("2026-07-28T00:00:00Z")}
       />,
     );
 

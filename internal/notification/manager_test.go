@@ -24,6 +24,14 @@ func TestManagerUsesInitialSnapshotAsSilentBaseline(t *testing.T) {
 	}
 }
 
+func TestActivityVerbIncludesCommit(t *testing.T) {
+	t.Parallel()
+
+	if got, want := activityVerb("commit"), "committed"; got != want {
+		t.Fatalf("activityVerb(commit) = %q, want %q", got, want)
+	}
+}
+
 func TestManagerSendsNewItemsAndActivity(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +188,55 @@ func TestManagerSeedsRetainedItemsBeforeInitialSnapshot(t *testing.T) {
 	}
 	if len(sender.messages) != 0 {
 		t.Fatalf("sent messages = %#v, want none", sender.messages)
+	}
+}
+
+func TestManagerSilencesCommitHydrationBeforeCachedUpdate(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	manager := New(sender)
+	item := testItem()
+	item.LatestActivity = &model.Activity{
+		Kind:       "comment",
+		Actor:      "alice",
+		OccurredAt: item.UpdatedAt.Add(-5 * time.Minute),
+		URL:        item.URL + "#issuecomment-1",
+	}
+	manager.Seed([]model.WorkItem{item})
+
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("baseline Observe() error = %v", err)
+	}
+
+	historicalCommit := &model.Activity{
+		Kind:       "commit",
+		Actor:      "alice",
+		OccurredAt: item.UpdatedAt,
+		URL:        item.URL + "/commits/historical",
+	}
+	item.LatestActivity = historicalCommit
+	item.LatestCommit = historicalCommit
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("hydrated commit Observe() error = %v", err)
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("hydrated commit messages = %#v, want none", sender.messages)
+	}
+
+	newCommit := &model.Activity{
+		Kind:       "commit",
+		Actor:      "alice",
+		OccurredAt: item.UpdatedAt.Add(time.Minute),
+		URL:        item.URL + "/commits/new",
+	}
+	item.LatestActivity = newCommit
+	item.LatestCommit = newCommit
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("new commit Observe() error = %v", err)
+	}
+	if len(sender.messages) != 1 || sender.messages[0].Body != "alice committed" {
+		t.Fatalf("new commit messages = %#v, want one commit", sender.messages)
 	}
 }
 

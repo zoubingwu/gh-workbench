@@ -34,6 +34,20 @@ func TestRunnerBatchesActivitiesAndPollsReactions(t *testing.T) {
 		t.Fatalf("EnsureAccount() error = %v", err)
 	}
 
+	previousCommit := &model.Activity{
+		Kind:       "commit",
+		Actor:      "octocat",
+		BodyText:   "abcdef1 Initial implementation",
+		OccurredAt: now.Add(-2 * time.Hour),
+		URL:        "https://github.com/acme/rocket/commit/abcdef1234567890",
+	}
+	nextCommit := &model.Activity{
+		Kind:       "commit",
+		Actor:      "octocat",
+		BodyText:   "fedcba9 Cover retry case",
+		OccurredAt: now.Add(-45 * time.Minute),
+		URL:        "https://github.com/acme/rocket/commit/fedcba9876543210",
+	}
 	items := []model.WorkItem{
 		{
 			NodeID:         "PR_kwDO_rocket_7",
@@ -50,6 +64,7 @@ func TestRunnerBatchesActivitiesAndPollsReactions(t *testing.T) {
 			NeedsReview:    true,
 			Additions:      42,
 			Deletions:      7,
+			LatestCommit:   previousCommit,
 		},
 		{
 			NodeID:        "PR_kwDO_satellite_7",
@@ -85,6 +100,9 @@ func TestRunnerBatchesActivitiesAndPollsReactions(t *testing.T) {
 	source := &fakeSource{
 		items:      model.ItemsResult{Items: items},
 		activities: activities,
+		latestCommits: map[string]*model.Activity{
+			"PR_kwDO_rocket_7": nextCommit,
+		},
 		reactions: map[string]model.ReactionsResult{
 			"github.com/acme/rocket": {
 				Reactions: []model.Reaction{
@@ -137,6 +155,44 @@ func TestRunnerBatchesActivitiesAndPollsReactions(t *testing.T) {
 				}
 				if calls := source.activityCalls.Load(); calls != 1 {
 					t.Fatalf("activity API calls = %d, want 1", calls)
+				}
+				var targetCommit *model.Activity
+				for _, target := range source.activityTargets {
+					if target.NodeID == "PR_kwDO_rocket_7" {
+						targetCommit = target.LatestCommit
+						break
+					}
+				}
+				if targetCommit == nil || *targetCommit != *previousCommit {
+					t.Fatalf(
+						"FetchLatestActivities() LatestCommit = %#v, want %#v",
+						targetCommit,
+						previousCommit,
+					)
+				}
+				resources, err := database.ListDueResources(
+					context.Background(),
+					host,
+					now.Add(24*time.Hour),
+					100,
+				)
+				if err != nil {
+					t.Fatalf("ListDueResources() after activity poll error = %v", err)
+				}
+				var persistedCommit *model.Activity
+				for _, resource := range resources {
+					if resource.Kind == model.ResourceKindActivity &&
+						resource.NodeID == "PR_kwDO_rocket_7" {
+						persistedCommit = resource.LatestCommit
+						break
+					}
+				}
+				if persistedCommit == nil || *persistedCommit != *nextCommit {
+					t.Fatalf(
+						"persisted LatestCommit = %#v, want %#v",
+						persistedCommit,
+						nextCommit,
+					)
 				}
 				return
 			}
@@ -270,11 +326,13 @@ func TestRunnerRecordsActivityBatchRateLimitForEveryResource(t *testing.T) {
 }
 
 type fakeSource struct {
-	items         model.ItemsResult
-	activities    map[string]*model.Activity
-	reactions     map[string]model.ReactionsResult
-	activityErr   error
-	activityCalls atomic.Int32
+	items           model.ItemsResult
+	activities      map[string]*model.Activity
+	latestCommits   map[string]*model.Activity
+	reactions       map[string]model.ReactionsResult
+	activityTargets []model.ActivityTarget
+	activityErr     error
+	activityCalls   atomic.Int32
 }
 
 func (f *fakeSource) FetchRelevantOpenItems(
@@ -302,10 +360,16 @@ func (f *fakeSource) FetchLatestActivities(
 	if f.activityErr != nil {
 		return nil, f.activityErr
 	}
+	f.activityTargets = append(f.activityTargets, targets...)
 	results := make([]model.ActivityResult, 0, len(targets))
 	for _, target := range targets {
+		latestCommit := target.LatestCommit
+		if commit, ok := f.latestCommits[target.NodeID]; ok {
+			latestCommit = commit
+		}
 		results = append(results, model.ActivityResult{
 			Activity:            f.activities[target.NodeID],
+			LatestCommit:        latestCommit,
 			LatestReviewComment: target.LatestReviewComment,
 			ETag:                target.ETag,
 		})

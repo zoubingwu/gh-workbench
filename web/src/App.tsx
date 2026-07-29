@@ -13,9 +13,11 @@ import {
 type ConnectionState = "connecting" | "connected" | "disconnected";
 
 const SHOW_INACTIVE_STORAGE_KEY = "gh-workbench:show-inactive:v1";
+const DISPLAY_CLOCK_INTERVAL_MS = 60_000;
 const LABEL_COLOR_PATTERN = /^#?([0-9a-f]{6})$/i;
 const activityVerbs: Readonly<Record<string, string>> = {
   comment: "commented",
+  commit: "committed",
   review_comment: "left a review comment",
   review_approved: "approved",
   review_changes_requested: "requested changes",
@@ -114,9 +116,18 @@ function WorkItemIcon({ kind }: { kind: WorkItem["kind"] }) {
   );
 }
 
-export function WorkItemRow({ item, now }: { item: WorkItem; now: number }) {
+export function WorkItemRow({
+  item,
+  now,
+  displayTime,
+}: {
+  item: WorkItem;
+  now: number;
+  displayTime: number;
+}) {
   const reactions = groupedReactions(item.reactions);
   const inactive = isInactive(item.updatedAt, now);
+  const relativeTimeReference = Math.max(now, displayTime);
   const isPullRequest = item.kind === "pull_request";
   const status = isPullRequest ? workItemStatus(item) : null;
 
@@ -164,16 +175,19 @@ export function WorkItemRow({ item, now }: { item: WorkItem; now: number }) {
           </span>
           <span aria-hidden="true">·</span>
           <time dateTime={item.updatedAt} title={formatAbsoluteTime(item.updatedAt)}>
-            updated {formatRelativeTime(item.updatedAt)}
+            updated {formatRelativeTime(item.updatedAt, relativeTimeReference)}
           </time>
           {item.latestActivity ? (
             <span className="latest-activity">
               <span aria-hidden="true">·</span>
-              <span
-                className="latest-activity-text"
-                title={formatAbsoluteTime(item.latestActivity.occurredAt)}
-              >
-                {item.latestActivity.actor || "ghost"} {activityVerb(item.latestActivity.kind)}
+              <span className="latest-activity-text">
+                {item.latestActivity.actor || "ghost"} {activityVerb(item.latestActivity.kind)}{" "}
+                <time
+                  dateTime={item.latestActivity.occurredAt}
+                  title={formatAbsoluteTime(item.latestActivity.occurredAt)}
+                >
+                  {formatRelativeTime(item.latestActivity.occurredAt, relativeTimeReference)}
+                </time>
                 {item.latestActivity.bodyText ? `: ${item.latestActivity.bodyText}` : ""}
               </span>
             </span>
@@ -211,9 +225,18 @@ function App() {
   const [requestingSync, setRequestingSync] = useState(false);
   const [savingNotifications, setSavingNotifications] = useState(false);
   const [transportError, setTransportError] = useState<string | null>(null);
+  const [displayTime, setDisplayTime] = useState(() => Date.now());
   const notificationsSupported = snapshot?.notifications.supported ?? false;
   const notificationsEnabled = snapshot?.notifications.enabled ?? false;
   const onlyMyPullRequests = snapshot?.notifications.onlyMyPullRequests ?? true;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setDisplayTime(Date.now());
+    }, DISPLAY_CLOCK_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -529,7 +552,12 @@ function App() {
                 </header>
                 <div className="work-list">
                   {group.items.map((item) => (
-                    <WorkItemRow item={item} now={referenceTime} key={item.url} />
+                    <WorkItemRow
+                      item={item}
+                      now={referenceTime}
+                      displayTime={displayTime}
+                      key={item.url}
+                    />
                   ))}
                 </div>
               </section>

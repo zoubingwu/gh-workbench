@@ -731,11 +731,17 @@ func TestClientFetchLatestActivitiesNormalizesPullRequestReview(t *testing.T) {
 				t.Fatalf("decode GraphQL request: %v", err)
 			}
 			for _, fragment := range []string{
+				"ISSUE_COMMENT",
 				"PULL_REQUEST_REVIEW",
 				"REOPENED_EVENT",
 				"READY_FOR_REVIEW_EVENT",
 				"CONVERT_TO_DRAFT_EVENT",
-				"... on PullRequestReview",
+				"PULL_REQUEST_COMMIT",
+				"fragment PullRequestReviewActivity on PullRequestReview",
+				"fragment PullRequestCommitActivity on PullRequestCommit",
+				"latestCommit: timelineItems",
+				"latestReview: timelineItems",
+				"url\n      updatedAt\n      comments",
 			} {
 				if !strings.Contains(payload.Query, fragment) {
 					t.Fatalf(
@@ -752,6 +758,7 @@ func TestClientFetchLatestActivitiesNormalizesPullRequestReview(t *testing.T) {
 						"__typename": "PullRequest",
 						"id": "PR_rocket_7",
 						"url": "https://github.com/acme/rocket/pull/7",
+						"updatedAt": "2026-07-28T10:45:00Z",
 						"comments": {"nodes": []},
 						"timelineItems": {
 							"nodes": [{
@@ -762,6 +769,19 @@ func TestClientFetchLatestActivitiesNormalizesPullRequestReview(t *testing.T) {
 								"submittedAt": "2026-07-28T10:30:00Z",
 								"updatedAt": "2026-07-28T10:30:00Z",
 								"url": "https://github.com/acme/rocket/pull/7#pullrequestreview-42"
+							}]
+						},
+						"latestCommit": {
+							"nodes": [{
+								"__typename": "PullRequestCommit",
+								"url": "https://github.com/acme/rocket/pull/7/commits/abc1234",
+								"commit": {
+									"abbreviatedOid": "abc1234",
+									"committedDate": "2026-07-28T09:00:00Z",
+									"messageHeadline": "Prepare review",
+									"author": {"user": {"login": "author"}},
+									"committer": {"user": {"login": "committer"}}
+								}
 							}]
 						}
 					}]
@@ -800,6 +820,194 @@ func TestClientFetchLatestActivitiesNormalizesPullRequestReview(t *testing.T) {
 	if len(results) != 1 || results[0].Activity == nil ||
 		*results[0].Activity != *want {
 		t.Fatalf("review activity = %#v, want %#v", results, want)
+	}
+	wantCommit := &model.Activity{
+		Kind:       "commit",
+		Actor:      "committer",
+		BodyText:   "abc1234 Prepare review",
+		OccurredAt: time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
+		URL:        "https://github.com/acme/rocket/pull/7/commits/abc1234",
+	}
+	if results[0].LatestCommit == nil ||
+		*results[0].LatestCommit != *wantCommit {
+		t.Fatalf(
+			"latest commit = %#v, want %#v",
+			results[0].LatestCommit,
+			wantCommit,
+		)
+	}
+}
+
+func TestClientFetchLatestActivitiesOrdersExactActivitiesAroundStableCommit(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	graphQLCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/graphql":
+			graphQLCalls++
+			updatedAt := "2026-07-28T10:45:00Z"
+			commentUpdatedAt := "2026-07-28T10:44:00Z"
+			reviewUpdatedAt := "2026-07-28T10:45:00Z"
+			if graphQLCalls > 1 {
+				updatedAt = "2026-07-28T11:30:00Z"
+				reviewUpdatedAt = "2026-07-28T10:30:00Z"
+			}
+			if graphQLCalls > 2 {
+				updatedAt = "2026-07-28T12:00:00Z"
+				commentUpdatedAt = "2026-07-28T10:50:00Z"
+			}
+			_, _ = io.WriteString(response, `{"data":{"nodes":[{
+				"__typename":"PullRequest",
+				"id":"PR_rocket_7",
+				"url":"https://github.com/acme/rocket/pull/7",
+				"updatedAt":"`+updatedAt+`",
+				"comments":{"nodes":[{
+					"author":{"login":"conversation-reviewer"},
+					"bodyText":"Please update the retry case.",
+					"createdAt":"2026-07-28T10:44:00Z",
+					"updatedAt":"`+commentUpdatedAt+`",
+					"url":"https://github.com/acme/rocket/pull/7#issuecomment-7"
+				}]},
+				"timelineItems":{"nodes":[{
+					"__typename":"PullRequestCommit",
+					"url":"https://github.com/acme/rocket/pull/7/commits/def5678",
+					"commit":{
+						"abbreviatedOid":"def5678",
+						"committedDate":"2026-07-28T09:00:00Z",
+						"messageHeadline":"Address review feedback",
+						"author":{"user":{"login":"author"}},
+						"committer":{"user":{"login":"committer"}}
+					}
+				}]},
+				"latestCommit":{"nodes":[{
+					"__typename":"PullRequestCommit",
+					"url":"https://github.com/acme/rocket/pull/7/commits/def5678",
+					"commit":{
+						"abbreviatedOid":"def5678",
+						"committedDate":"2026-07-28T09:00:00Z",
+						"messageHeadline":"Address review feedback",
+						"author":{"user":{"login":"author"}},
+						"committer":{"user":{"login":"committer"}}
+					}
+				}]},
+				"latestReview":{"nodes":[{
+					"__typename":"PullRequestReview",
+					"author":{"login":"reviewer"},
+					"bodyText":"Please cover the retry case.",
+					"state":"CHANGES_REQUESTED",
+					"submittedAt":"2026-07-28T10:30:00Z",
+					"updatedAt":"`+reviewUpdatedAt+`",
+					"url":"https://github.com/acme/rocket/pull/7#pullrequestreview-42"
+				}]}
+			}]}}`)
+		case "/repos/acme/rocket/pulls/7/comments":
+			_, _ = io.WriteString(response, `[{
+				"user":{"login":"reviewer"},
+				"body_text":"Please cover the retry case.",
+				"created_at":"2026-07-28T10:30:00Z",
+				"updated_at":"2026-07-28T10:30:00Z",
+				"html_url":"https://github.com/acme/rocket/pull/7#discussion_r42"
+			}]`)
+		default:
+			t.Fatalf("request path = %q, want GraphQL or review comments", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithBaseURL(server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+	client.gate.interval = 0
+
+	results, err := client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		NodeID:     "PR_rocket_7",
+		Repository: model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:     7,
+		Kind:       model.ItemKindPullRequest,
+	}})
+	if err != nil {
+		t.Fatalf("FetchLatestActivities() error = %v", err)
+	}
+	wantCommit := &model.Activity{
+		Kind:       "commit",
+		Actor:      "committer",
+		BodyText:   "def5678 Address review feedback",
+		OccurredAt: time.Date(2026, 7, 28, 10, 45, 0, 0, time.UTC),
+		URL:        "https://github.com/acme/rocket/pull/7/commits/def5678",
+	}
+	wantReview := &model.Activity{
+		Kind:       "review_changes_requested",
+		Actor:      "reviewer",
+		BodyText:   "Please cover the retry case.",
+		OccurredAt: time.Date(2026, 7, 28, 10, 45, 0, 0, time.UTC),
+		URL:        "https://github.com/acme/rocket/pull/7#pullrequestreview-42",
+	}
+	if len(results) != 1 || results[0].Activity == nil ||
+		*results[0].Activity != *wantReview {
+		t.Fatalf("latest activity = %#v, want %#v", results, wantReview)
+	}
+	if results[0].LatestCommit == nil ||
+		*results[0].LatestCommit != *wantCommit {
+		t.Fatalf(
+			"latest commit = %#v, want %#v",
+			results[0].LatestCommit,
+			wantCommit,
+		)
+	}
+
+	results, err = client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		NodeID:              "PR_rocket_7",
+		Repository:          model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:              7,
+		Kind:                model.ItemKindPullRequest,
+		LatestCommit:        results[0].LatestCommit,
+		LatestReviewComment: results[0].LatestReviewComment,
+	}})
+	if err != nil {
+		t.Fatalf("second FetchLatestActivities() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Activity == nil ||
+		*results[0].Activity != *wantCommit {
+		t.Fatalf("latest activity = %#v, want %#v", results, wantCommit)
+	}
+	if results[0].LatestCommit == nil ||
+		*results[0].LatestCommit != *wantCommit {
+		t.Fatalf(
+			"stable latest commit = %#v, want %#v",
+			results[0].LatestCommit,
+			wantCommit,
+		)
+	}
+
+	results, err = client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		NodeID:              "PR_rocket_7",
+		Repository:          model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:              7,
+		Kind:                model.ItemKindPullRequest,
+		LatestCommit:        results[0].LatestCommit,
+		LatestReviewComment: results[0].LatestReviewComment,
+	}})
+	if err != nil {
+		t.Fatalf("third FetchLatestActivities() error = %v", err)
+	}
+	wantComment := &model.Activity{
+		Kind:       "comment",
+		Actor:      "conversation-reviewer",
+		BodyText:   "Please update the retry case.",
+		OccurredAt: time.Date(2026, 7, 28, 10, 50, 0, 0, time.UTC),
+		URL:        "https://github.com/acme/rocket/pull/7#issuecomment-7",
+	}
+	if len(results) != 1 || results[0].Activity == nil ||
+		*results[0].Activity != *wantComment {
+		t.Fatalf("latest activity = %#v, want %#v", results, wantComment)
 	}
 }
 

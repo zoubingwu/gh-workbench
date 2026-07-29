@@ -493,7 +493,7 @@ func (c *Client) FetchLatestActivities(
 		}
 		ids = append(ids, target.NodeID)
 	}
-	activities := make(map[string]*model.Activity, len(targets))
+	activities := make(map[string]graphQLActivityCandidates, len(targets))
 	for start := 0; start < len(ids); start += activityBatchSize {
 		end := min(start+activityBatchSize, len(ids))
 		batch, err := c.fetchActivityBatch(ctx, ids[start:end])
@@ -507,7 +507,20 @@ func (c *Client) FetchLatestActivities(
 
 	results := make([]model.ActivityResult, 0, len(targets))
 	for _, target := range targets {
-		activity := activities[target.NodeID]
+		candidates := activities[target.NodeID]
+		activity := candidates.Latest
+		var latestCommit *model.Activity
+		if sameCommitActivity(activity, candidates.LatestCommit) {
+			activity = stabilizeCommitActivity(activity, target.LatestCommit)
+			latestCommit = activity
+		} else {
+			latestCommit = stabilizeCommitActivity(
+				candidates.LatestCommit,
+				target.LatestCommit,
+			)
+		}
+		activity = laterActivity(activity, candidates.LatestComment)
+		activity = laterActivity(activity, candidates.LatestReview)
 		etag := target.ETag
 		var latestReviewComment *model.Activity
 		if target.Kind == model.ItemKindPullRequest {
@@ -530,13 +543,10 @@ func (c *Client) FetchLatestActivities(
 			}
 			latestReviewComment = inline
 			activity = laterActivity(activity, inline)
-			if activity != nil && inline != nil &&
-				inline.OccurredAt.Equal(activity.OccurredAt) {
-				activity = inline
-			}
 		}
 		results = append(results, model.ActivityResult{
 			Activity:            activity,
+			LatestCommit:        latestCommit,
 			LatestReviewComment: latestReviewComment,
 			ETag:                etag,
 		})
@@ -639,7 +649,7 @@ func (c *Client) fetchLatestReviewComment(
 func (c *Client) fetchActivityBatch(
 	ctx context.Context,
 	ids []string,
-) (map[string]*model.Activity, error) {
+) (map[string]graphQLActivityCandidates, error) {
 	body, err := json.Marshal(graphQLActivityRequest{
 		Query: latestActivitiesQuery,
 		Variables: graphQLActivityVariables{
@@ -680,30 +690,45 @@ func (c *Client) fetchActivityBatch(
 		return nil, err
 	}
 
-	activities := make(map[string]*model.Activity, len(result.Data.Nodes))
+	activities := make(
+		map[string]graphQLActivityCandidates,
+		len(result.Data.Nodes),
+	)
 	for _, node := range result.Data.Nodes {
 		if node == nil || node.ID == "" {
 			continue
 		}
-		activities[node.ID] = latestGraphQLActivity(node)
+		activities[node.ID] = latestGraphQLActivities(node)
 	}
 	return activities, nil
 }
 
-func latestGraphQLActivity(node *graphQLActivityNode) *model.Activity {
+type graphQLActivityCandidates struct {
+	Latest        *model.Activity
+	LatestCommit  *model.Activity
+	LatestComment *model.Activity
+	LatestReview  *model.Activity
+}
+
+func latestGraphQLActivities(
+	node *graphQLActivityNode,
+) graphQLActivityCandidates {
 	var latest *model.Activity
+	var latestComment *model.Activity
 	for _, comment := range node.Comments.Nodes {
 		occurredAt := comment.UpdatedAt
 		if occurredAt.IsZero() {
 			occurredAt = comment.CreatedAt
 		}
-		latest = laterActivity(latest, &model.Activity{
+		activity := &model.Activity{
 			Kind:       "comment",
 			Actor:      login(comment.Author),
 			BodyText:   normalizeActivityBody(comment.BodyText),
 			OccurredAt: occurredAt,
 			URL:        comment.URL,
-		})
+		}
+		latestComment = laterActivity(latestComment, activity)
+		latest = laterActivity(latest, activity)
 	}
 	for _, event := range node.TimelineItems.Nodes {
 		var activity *model.Activity
@@ -725,21 +750,21 @@ func latestGraphQLActivity(node *graphQLActivityNode) *model.Activity {
 				URL:        node.URL,
 			}
 		case "PullRequestReview":
+			activity = pullRequestReviewActivity(event)
+		case "IssueComment":
 			occurredAt := event.UpdatedAt
 			if occurredAt.IsZero() {
-				occurredAt = event.SubmittedAt
-			}
-			kind := "review"
-			if state := normalizeGraphQLEnum(event.State); state != "" {
-				kind += "_" + state
+				occurredAt = event.CreatedAt
 			}
 			activity = &model.Activity{
-				Kind:       kind,
+				Kind:       "comment",
 				Actor:      login(event.Author),
 				BodyText:   normalizeActivityBody(event.BodyText),
 				OccurredAt: occurredAt,
 				URL:        event.URL,
 			}
+		case "PullRequestCommit":
+			activity = pullRequestCommitActivity(event, node.UpdatedAt)
 		case "ReopenedEvent":
 			activity = timelineStateActivity("reopened", node.URL, event)
 		case "ReviewRequestedEvent":
@@ -753,7 +778,85 @@ func latestGraphQLActivity(node *graphQLActivityNode) *model.Activity {
 		}
 		latest = laterActivity(latest, activity)
 	}
-	return latest
+	var latestCommit *model.Activity
+	for _, event := range node.LatestCommit.Nodes {
+		latestCommit = pullRequestCommitActivity(
+			event,
+			event.Commit.CommittedDate,
+		)
+	}
+	if latestCommit == nil && latest != nil && latest.Kind == "commit" {
+		latestCommit = latest
+	}
+	var latestReview *model.Activity
+	for _, event := range node.LatestReview.Nodes {
+		latestReview = pullRequestReviewActivity(event)
+	}
+	return graphQLActivityCandidates{
+		Latest:        latest,
+		LatestCommit:  latestCommit,
+		LatestComment: latestComment,
+		LatestReview:  latestReview,
+	}
+}
+
+func pullRequestReviewActivity(event graphQLTimelineEvent) *model.Activity {
+	occurredAt := event.UpdatedAt
+	if occurredAt.IsZero() {
+		occurredAt = event.SubmittedAt
+	}
+	kind := "review"
+	if state := normalizeGraphQLEnum(event.State); state != "" {
+		kind += "_" + state
+	}
+	return &model.Activity{
+		Kind:       kind,
+		Actor:      login(event.Author),
+		BodyText:   normalizeActivityBody(event.BodyText),
+		OccurredAt: occurredAt,
+		URL:        event.URL,
+	}
+}
+
+func pullRequestCommitActivity(
+	event graphQLTimelineEvent,
+	occurredAt time.Time,
+) *model.Activity {
+	actor := event.Commit.Committer.User
+	if actor == nil || actor.Login == "" {
+		actor = event.Commit.Author.User
+	}
+	if occurredAt.IsZero() {
+		occurredAt = event.Commit.CommittedDate
+	}
+	return &model.Activity{
+		Kind:  "commit",
+		Actor: login(actor),
+		BodyText: normalizeActivityBody(
+			event.Commit.AbbreviatedOID + " " + event.Commit.MessageHeadline,
+		),
+		OccurredAt: occurredAt,
+		URL:        event.URL,
+	}
+}
+
+func stabilizeCommitActivity(
+	current *model.Activity,
+	previous *model.Activity,
+) *model.Activity {
+	if sameCommitActivity(current, previous) {
+		current.OccurredAt = previous.OccurredAt
+	}
+	return current
+}
+
+func sameCommitActivity(left *model.Activity, right *model.Activity) bool {
+	return left != nil &&
+		right != nil &&
+		left.Kind == "commit" &&
+		right.Kind == "commit" &&
+		left.URL != "" &&
+		left.URL == right.URL
 }
 
 func timelineStateActivity(
@@ -773,7 +876,7 @@ func laterActivity(current, candidate *model.Activity) *model.Activity {
 	if candidate == nil {
 		return current
 	}
-	if current == nil || candidate.OccurredAt.After(current.OccurredAt) {
+	if current == nil || !candidate.OccurredAt.Before(current.OccurredAt) {
 		return candidate
 	}
 	return current
@@ -1111,6 +1214,7 @@ query LatestActivities($ids: [ID!]!) {
     ... on PullRequest {
       id
       url
+      updatedAt
       comments(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
         nodes {
           author {
@@ -1123,6 +1227,7 @@ query LatestActivities($ids: [ID!]!) {
         }
       }
       timelineItems(last: 1, itemTypes: [
+        ISSUE_COMMENT
         PULL_REQUEST_REVIEW
         LABELED_EVENT
         UNLABELED_EVENT
@@ -1131,19 +1236,21 @@ query LatestActivities($ids: [ID!]!) {
         REVIEW_REQUEST_REMOVED_EVENT
         READY_FOR_REVIEW_EVENT
         CONVERT_TO_DRAFT_EVENT
+        PULL_REQUEST_COMMIT
       ]) {
         nodes {
           __typename
-          ... on PullRequestReview {
+          ...PullRequestReviewActivity
+          ... on IssueComment {
             author {
               login
             }
             bodyText
-            state
-            submittedAt
+            createdAt
             updatedAt
             url
           }
+          ...PullRequestCommitActivity
           ... on LabeledEvent {
             actor {
               login
@@ -1194,6 +1301,52 @@ query LatestActivities($ids: [ID!]!) {
           }
         }
       }
+      latestCommit: timelineItems(last: 1, itemTypes: [
+        PULL_REQUEST_COMMIT
+      ]) {
+        nodes {
+          __typename
+          ...PullRequestCommitActivity
+        }
+      }
+      latestReview: timelineItems(last: 1, itemTypes: [
+        PULL_REQUEST_REVIEW
+      ]) {
+        nodes {
+          __typename
+          ...PullRequestReviewActivity
+        }
+      }
+    }
+  }
+}
+
+fragment PullRequestReviewActivity on PullRequestReview {
+  author {
+    login
+  }
+  bodyText
+  state
+  submittedAt
+  updatedAt
+  url
+}
+
+fragment PullRequestCommitActivity on PullRequestCommit {
+  url
+  commit {
+    abbreviatedOid
+    committedDate
+    messageHeadline
+    author {
+      user {
+        login
+      }
+    }
+    committer {
+      user {
+        login
+      }
     }
   }
 }`
@@ -1239,15 +1392,22 @@ type graphQLActivityResponse struct {
 }
 
 type graphQLActivityNode struct {
-	TypeName string `json:"__typename"`
-	ID       string `json:"id"`
-	URL      string `json:"url"`
-	Comments struct {
+	TypeName  string    `json:"__typename"`
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Comments  struct {
 		Nodes []graphQLComment `json:"nodes"`
 	} `json:"comments"`
 	TimelineItems struct {
 		Nodes []graphQLTimelineEvent `json:"nodes"`
 	} `json:"timelineItems"`
+	LatestCommit struct {
+		Nodes []graphQLTimelineEvent `json:"nodes"`
+	} `json:"latestCommit"`
+	LatestReview struct {
+		Nodes []graphQLTimelineEvent `json:"nodes"`
+	} `json:"latestReview"`
 }
 
 type graphQLComment struct {
@@ -1269,6 +1429,19 @@ type graphQLTimelineEvent struct {
 	UpdatedAt   time.Time     `json:"updatedAt"`
 	URL         string        `json:"url"`
 	Label       labelResponse `json:"label"`
+	Commit      graphQLCommit `json:"commit"`
+}
+
+type graphQLCommit struct {
+	AbbreviatedOID  string          `json:"abbreviatedOid"`
+	CommittedDate   time.Time       `json:"committedDate"`
+	MessageHeadline string          `json:"messageHeadline"`
+	Author          graphQLGitActor `json:"author"`
+	Committer       graphQLGitActor `json:"committer"`
+}
+
+type graphQLGitActor struct {
+	User *userResponse `json:"user"`
 }
 
 type graphQLSearchNode struct {

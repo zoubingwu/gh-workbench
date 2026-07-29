@@ -86,6 +86,7 @@ type WorkItem struct {
 	Deletions           int        `json:"deletions"`
 	Labels              []Label    `json:"labels"`
 	LatestActivity      *Activity  `json:"latestActivity"`
+	LatestCommit        *Activity  `json:"-"`
 	LatestReviewComment *Activity  `json:"-"`
 	Reactions           []Reaction `json:"reactions"`
 	Poll                PollStatus `json:"poll"`
@@ -108,12 +109,14 @@ type ActivityTarget struct {
 	Repository          Repository
 	Number              int
 	Kind                ItemKind
+	LatestCommit        *Activity
 	LatestReviewComment *Activity
 	ETag                string
 }
 
 type ActivityResult struct {
 	Activity            *Activity
+	LatestCommit        *Activity
 	LatestReviewComment *Activity
 	ETag                string
 }
@@ -162,6 +165,7 @@ type PollResource struct {
 	LastError           string
 	NodeID              string
 	ItemKind            ItemKind
+	LatestCommit        *Activity
 	LatestReviewComment *Activity
 }
 

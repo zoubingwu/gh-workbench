@@ -588,9 +588,10 @@ func TestSelectedItemUsesCompactBrowserRow(t *testing.T) {
 	item.Additions = 10
 	item.Deletions = 2
 	item.LatestActivity = &model.Activity{
-		Kind:     "comment",
-		Actor:    "bob",
-		BodyText: "looks good",
+		Kind:       "comment",
+		Actor:      "bob",
+		BodyText:   "looks good",
+		OccurredAt: now.Add(-15 * time.Minute),
 	}
 	item.Reactions = []model.Reaction{
 		{Content: "eyes"},
@@ -628,7 +629,7 @@ func TestSelectedItemUsesCompactBrowserRow(t *testing.T) {
 		t.Fatalf("compact detail line has unexpected order: %q", detailLine)
 	}
 	for _, value := range []string{
-		"bob commented: looks good",
+		"bob commented 15m ago: looks good",
 		"Poll error: rate limited",
 	} {
 		if !strings.Contains(detailLine, value) {
@@ -663,9 +664,10 @@ func TestViewKeepsStructuredDetailsVisibleForEveryItem(t *testing.T) {
 	second.Additions = 22
 	second.Deletions = 3
 	second.LatestActivity = &model.Activity{
-		Kind:     "review_approved",
-		Actor:    "carol",
-		BodyText: "ready to merge",
+		Kind:       "review_approved",
+		Actor:      "carol",
+		BodyText:   "ready to merge",
+		OccurredAt: now.Add(-2 * time.Hour),
 	}
 	second.Reactions = []model.Reaction{
 		{Content: "rocket"},
@@ -695,7 +697,7 @@ func TestViewKeepsStructuredDetailsVisibleForEveryItem(t *testing.T) {
 		"Changes requested",
 		"+22",
 		"-3",
-		"carol approved: ready to merge",
+		"carol approved 2h ago: ready to merge",
 		"🚀 1",
 		"Poll error: secondary poll failed",
 	} {
@@ -705,6 +707,14 @@ func TestViewKeepsStructuredDetailsVisibleForEveryItem(t *testing.T) {
 	}
 	if nextLine := strings.TrimSpace(lines[titleIndex+2]); nextLine != "" {
 		t.Fatalf("compact row uses more than two lines: %q", nextLine)
+	}
+}
+
+func TestActivityVerbIncludesCommit(t *testing.T) {
+	t.Parallel()
+
+	if got, want := activityVerb("commit"), "committed"; got != want {
+		t.Fatalf("activityVerb(commit) = %q, want %q", got, want)
 	}
 }
 
