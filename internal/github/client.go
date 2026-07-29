@@ -519,11 +519,8 @@ func (c *Client) FetchLatestActivities(
 				target.LatestCommit,
 			)
 		}
-		if candidates.LatestReview != nil &&
-			(activity == nil ||
-				candidates.LatestReview.OccurredAt.After(activity.OccurredAt)) {
-			activity = candidates.LatestReview
-		}
+		activity = laterActivity(activity, candidates.LatestComment)
+		activity = laterActivity(activity, candidates.LatestReview)
 		etag := target.ETag
 		var latestReviewComment *model.Activity
 		if target.Kind == model.ItemKindPullRequest {
@@ -707,27 +704,31 @@ func (c *Client) fetchActivityBatch(
 }
 
 type graphQLActivityCandidates struct {
-	Latest       *model.Activity
-	LatestCommit *model.Activity
-	LatestReview *model.Activity
+	Latest        *model.Activity
+	LatestCommit  *model.Activity
+	LatestComment *model.Activity
+	LatestReview  *model.Activity
 }
 
 func latestGraphQLActivities(
 	node *graphQLActivityNode,
 ) graphQLActivityCandidates {
 	var latest *model.Activity
+	var latestComment *model.Activity
 	for _, comment := range node.Comments.Nodes {
 		occurredAt := comment.UpdatedAt
 		if occurredAt.IsZero() {
 			occurredAt = comment.CreatedAt
 		}
-		latest = laterActivity(latest, &model.Activity{
+		activity := &model.Activity{
 			Kind:       "comment",
 			Actor:      login(comment.Author),
 			BodyText:   normalizeActivityBody(comment.BodyText),
 			OccurredAt: occurredAt,
 			URL:        comment.URL,
-		})
+		}
+		latestComment = laterActivity(latestComment, activity)
+		latest = laterActivity(latest, activity)
 	}
 	for _, event := range node.TimelineItems.Nodes {
 		var activity *model.Activity
@@ -792,9 +793,10 @@ func latestGraphQLActivities(
 		latestReview = pullRequestReviewActivity(event)
 	}
 	return graphQLActivityCandidates{
-		Latest:       latest,
-		LatestCommit: latestCommit,
-		LatestReview: latestReview,
+		Latest:        latest,
+		LatestCommit:  latestCommit,
+		LatestComment: latestComment,
+		LatestReview:  latestReview,
 	}
 }
 

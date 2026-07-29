@@ -838,7 +838,9 @@ func TestClientFetchLatestActivitiesNormalizesPullRequestReview(t *testing.T) {
 	}
 }
 
-func TestClientFetchLatestActivitiesStabilizesCommitBeforeLaterReview(t *testing.T) {
+func TestClientFetchLatestActivitiesOrdersExactActivitiesAroundStableCommit(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	graphQLCalls := 0
@@ -851,10 +853,15 @@ func TestClientFetchLatestActivitiesStabilizesCommitBeforeLaterReview(t *testing
 		case "/graphql":
 			graphQLCalls++
 			updatedAt := "2026-07-28T10:45:00Z"
-			reviewUpdatedAt := "2026-07-28T10:30:00Z"
+			commentUpdatedAt := "2026-07-28T10:44:00Z"
+			reviewUpdatedAt := "2026-07-28T10:45:00Z"
 			if graphQLCalls > 1 {
 				updatedAt = "2026-07-28T11:30:00Z"
-				reviewUpdatedAt = "2026-07-28T10:50:00Z"
+				reviewUpdatedAt = "2026-07-28T10:30:00Z"
+			}
+			if graphQLCalls > 2 {
+				updatedAt = "2026-07-28T12:00:00Z"
+				commentUpdatedAt = "2026-07-28T10:50:00Z"
 			}
 			_, _ = io.WriteString(response, `{"data":{"nodes":[{
 				"__typename":"PullRequest",
@@ -864,8 +871,8 @@ func TestClientFetchLatestActivitiesStabilizesCommitBeforeLaterReview(t *testing
 				"comments":{"nodes":[{
 					"author":{"login":"conversation-reviewer"},
 					"bodyText":"Please update the retry case.",
-					"createdAt":"2026-07-28T10:45:00Z",
-					"updatedAt":"2026-07-28T10:45:00Z",
+					"createdAt":"2026-07-28T10:44:00Z",
+					"updatedAt":"`+commentUpdatedAt+`",
 					"url":"https://github.com/acme/rocket/pull/7#issuecomment-7"
 				}]},
 				"timelineItems":{"nodes":[{
@@ -929,20 +936,31 @@ func TestClientFetchLatestActivitiesStabilizesCommitBeforeLaterReview(t *testing
 	if err != nil {
 		t.Fatalf("FetchLatestActivities() error = %v", err)
 	}
-	want := &model.Activity{
+	wantCommit := &model.Activity{
 		Kind:       "commit",
 		Actor:      "committer",
 		BodyText:   "def5678 Address review feedback",
 		OccurredAt: time.Date(2026, 7, 28, 10, 45, 0, 0, time.UTC),
 		URL:        "https://github.com/acme/rocket/pull/7/commits/def5678",
 	}
+	wantReview := &model.Activity{
+		Kind:       "review_changes_requested",
+		Actor:      "reviewer",
+		BodyText:   "Please cover the retry case.",
+		OccurredAt: time.Date(2026, 7, 28, 10, 45, 0, 0, time.UTC),
+		URL:        "https://github.com/acme/rocket/pull/7#pullrequestreview-42",
+	}
 	if len(results) != 1 || results[0].Activity == nil ||
-		*results[0].Activity != *want {
-		t.Fatalf("latest activity = %#v, want %#v", results, want)
+		*results[0].Activity != *wantReview {
+		t.Fatalf("latest activity = %#v, want %#v", results, wantReview)
 	}
 	if results[0].LatestCommit == nil ||
-		*results[0].LatestCommit != *want {
-		t.Fatalf("latest commit = %#v, want %#v", results[0].LatestCommit, want)
+		*results[0].LatestCommit != *wantCommit {
+		t.Fatalf(
+			"latest commit = %#v, want %#v",
+			results[0].LatestCommit,
+			wantCommit,
+		)
 	}
 
 	results, err = client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
@@ -956,24 +974,40 @@ func TestClientFetchLatestActivitiesStabilizesCommitBeforeLaterReview(t *testing
 	if err != nil {
 		t.Fatalf("second FetchLatestActivities() error = %v", err)
 	}
-	wantReview := &model.Activity{
-		Kind:       "review_changes_requested",
-		Actor:      "reviewer",
-		BodyText:   "Please cover the retry case.",
-		OccurredAt: time.Date(2026, 7, 28, 10, 50, 0, 0, time.UTC),
-		URL:        "https://github.com/acme/rocket/pull/7#pullrequestreview-42",
-	}
 	if len(results) != 1 || results[0].Activity == nil ||
-		*results[0].Activity != *wantReview {
-		t.Fatalf("latest activity = %#v, want %#v", results, wantReview)
+		*results[0].Activity != *wantCommit {
+		t.Fatalf("latest activity = %#v, want %#v", results, wantCommit)
 	}
 	if results[0].LatestCommit == nil ||
-		*results[0].LatestCommit != *want {
+		*results[0].LatestCommit != *wantCommit {
 		t.Fatalf(
 			"stable latest commit = %#v, want %#v",
 			results[0].LatestCommit,
-			want,
+			wantCommit,
 		)
+	}
+
+	results, err = client.FetchLatestActivities(t.Context(), []model.ActivityTarget{{
+		NodeID:              "PR_rocket_7",
+		Repository:          model.Repository{Host: "github.com", Owner: "acme", Name: "rocket"},
+		Number:              7,
+		Kind:                model.ItemKindPullRequest,
+		LatestCommit:        results[0].LatestCommit,
+		LatestReviewComment: results[0].LatestReviewComment,
+	}})
+	if err != nil {
+		t.Fatalf("third FetchLatestActivities() error = %v", err)
+	}
+	wantComment := &model.Activity{
+		Kind:       "comment",
+		Actor:      "conversation-reviewer",
+		BodyText:   "Please update the retry case.",
+		OccurredAt: time.Date(2026, 7, 28, 10, 50, 0, 0, time.UTC),
+		URL:        "https://github.com/acme/rocket/pull/7#issuecomment-7",
+	}
+	if len(results) != 1 || results[0].Activity == nil ||
+		*results[0].Activity != *wantComment {
+		t.Fatalf("latest activity = %#v, want %#v", results, wantComment)
 	}
 }
 
