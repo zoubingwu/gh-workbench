@@ -63,6 +63,17 @@ func New(sender Sender) *Manager {
 	}
 }
 
+func (m *Manager) Seed(items []model.WorkItem) {
+	for _, item := range items {
+		key := itemKey(item)
+		previous, exists := m.cursors[key]
+		current := nextActivityCursor(item, previous, exists)
+		if !exists || current.advances(previous) {
+			m.cursors[key] = current
+		}
+	}
+}
+
 func (m *Manager) Observe(ctx context.Context, snapshot model.Snapshot) error {
 	messages := make([]Message, 0)
 	for _, item := range snapshot.Items {

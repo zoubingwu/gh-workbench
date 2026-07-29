@@ -1203,7 +1203,7 @@ func (s *Store) Snapshot(
 	running bool,
 	now time.Time,
 ) (model.Snapshot, error) {
-	items, err := s.loadItems(ctx, scope)
+	items, err := s.loadItems(ctx, scope, 0)
 	if err != nil {
 		return model.Snapshot{}, err
 	}
@@ -1264,9 +1264,17 @@ func (s *Store) Snapshot(
 	}, nil
 }
 
+func (s *Store) NotificationBaselineItems(
+	ctx context.Context,
+	scope string,
+) ([]model.WorkItem, error) {
+	return s.loadItems(ctx, scope, missingPollsBeforeDelete-1)
+}
+
 func (s *Store) loadItems(
 	ctx context.Context,
 	scope string,
+	maxMissingPolls int,
 ) ([]model.WorkItem, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -1291,10 +1299,11 @@ func (s *Store) loadItems(
 			latest_activity_json
 		FROM work_items
 		WHERE (repository = ? OR repository GLOB ?)
-			AND missing_polls = 0
+			AND missing_polls <= ?
 		ORDER BY updated_at DESC, number DESC`,
 		scope,
 		scope+"/*",
+		maxMissingPolls,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load snapshot work items: %w", err)

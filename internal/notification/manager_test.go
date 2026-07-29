@@ -164,6 +164,25 @@ func TestManagerAdvancesCursorWhileDisabledAndAcrossOmissions(t *testing.T) {
 	}
 }
 
+func TestManagerSeedsRetainedItemsBeforeInitialSnapshot(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	manager := New(sender)
+	item := testItem()
+	manager.Seed([]model.WorkItem{item})
+
+	if err := manager.Observe(t.Context(), testSnapshot()); err != nil {
+		t.Fatalf("initial Observe() error = %v", err)
+	}
+	if err := manager.Observe(t.Context(), testSnapshot(item)); err != nil {
+		t.Fatalf("restored Observe() error = %v", err)
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("sent messages = %#v, want none", sender.messages)
+	}
+}
+
 func TestManagerReportsNewActivityAfterAQuietBaseline(t *testing.T) {
 	t.Parallel()
 

@@ -163,22 +163,6 @@ func Run(ctx context.Context, options Options) error {
 	}
 	defer listener.Close()
 
-	localServer, err := server.New(
-		database,
-		runner,
-		host,
-		viewer,
-		notification.Supported,
-	)
-	if err != nil {
-		return err
-	}
-
-	httpServer := &http.Server{
-		Handler:           localServer.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -204,17 +188,46 @@ func Run(ctx context.Context, options Options) error {
 	}
 	notificationManager := notification.New(notification.SystemSender())
 
+	localServer, err := server.New(
+		database,
+		runner,
+		host,
+		viewer,
+		notification.Supported,
+		func(observeContext context.Context, snapshot model.Snapshot) {
+			if err := notificationManager.Observe(
+				observeContext,
+				snapshot,
+			); err != nil {
+				reportNotificationError(err)
+			}
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	httpServer := &http.Server{
+		Handler:           localServer.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	baselineContext, baselineCancel := context.WithTimeout(
 		runContext,
 		shutdownPeriod,
 	)
-	baseline, err := localServer.PublishSnapshot(baselineContext)
+	baselineItems, err := database.NotificationBaselineItems(
+		baselineContext,
+		host,
+	)
+	if err == nil {
+		notificationManager.Seed(baselineItems)
+		_, err = localServer.PublishSnapshot(baselineContext)
+	}
 	baselineCancel()
 	if err != nil {
 		return fmt.Errorf("load initial workbench snapshot: %w", err)
-	}
-	if err := notificationManager.Observe(runContext, baseline); err != nil {
-		reportNotificationError(err)
 	}
 
 	results := make(chan error, 3)
@@ -236,16 +249,9 @@ func Run(ctx context.Context, options Options) error {
 			)
 			defer publishCancel()
 
-			snapshot, err := localServer.PublishSnapshot(publishContext)
+			_, err := localServer.PublishSnapshot(publishContext)
 			if err != nil {
 				reportSnapshotError(err)
-				return
-			}
-			if err := notificationManager.Observe(
-				runContext,
-				snapshot,
-			); err != nil {
-				reportNotificationError(err)
 			}
 		}
 		results <- publishSnapshots(

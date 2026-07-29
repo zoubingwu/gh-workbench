@@ -299,6 +299,16 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 	if len(snapshot.Items) != 1 {
 		t.Fatalf("visible items after removal = %d, want 1", len(snapshot.Items))
 	}
+	baselineItems, err := database.NotificationBaselineItems(ctx, host)
+	if err != nil {
+		t.Fatalf("NotificationBaselineItems() after removal error = %v", err)
+	}
+	if len(baselineItems) != 2 {
+		t.Fatalf(
+			"notification baseline items after removal = %d, want 2",
+			len(baselineItems),
+		)
+	}
 
 	for miss := 2; miss <= missingPollsBeforeDelete; miss++ {
 		changed, err = database.ReplaceRelevantOpenItems(
@@ -313,6 +323,33 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 		if changed {
 			t.Fatalf("missing poll %d changed = true, want false", miss)
 		}
+		if miss < missingPollsBeforeDelete {
+			baselineItems, err = database.NotificationBaselineItems(ctx, host)
+			if err != nil {
+				t.Fatalf(
+					"NotificationBaselineItems() after missing poll %d error = %v",
+					miss,
+					err,
+				)
+			}
+			if len(baselineItems) != 2 {
+				t.Fatalf(
+					"notification baseline items after missing poll %d = %d, want 2",
+					miss,
+					len(baselineItems),
+				)
+			}
+		}
+	}
+	baselineItems, err = database.NotificationBaselineItems(ctx, host)
+	if err != nil {
+		t.Fatalf("NotificationBaselineItems() after confirmed removal error = %v", err)
+	}
+	if len(baselineItems) != 1 {
+		t.Fatalf(
+			"notification baseline items after confirmed removal = %d, want 1",
+			len(baselineItems),
+		)
 	}
 	due, err = database.ListDueResources(ctx, host, now.Add(10*time.Minute), 10)
 	if err != nil {

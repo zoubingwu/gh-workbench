@@ -37,6 +37,7 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 		"github.com",
 		"octocat",
 		testNotificationsSupported,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -242,6 +243,7 @@ func TestServerRejectsNonLoopbackHost(t *testing.T) {
 		"github.com",
 		"octocat",
 		testNotificationsSupported,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -260,12 +262,24 @@ func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
 	t.Parallel()
 
 	database := &serializationCheckingStore{}
+	var (
+		server                    *Server
+		observerCalls             int
+		unserializedObserverCalls int
+	)
 	server, err := New(
 		database,
 		&fakeController{},
 		"github.com",
 		"octocat",
 		testNotificationsSupported,
+		func(_ context.Context, _ model.Snapshot) {
+			observerCalls++
+			if server.publicationMu.TryLock() {
+				unserializedObserverCalls++
+				server.publicationMu.Unlock()
+			}
+		},
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -299,6 +313,15 @@ func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
 			database.unserializedCalls,
 		)
 	}
+	if unserializedObserverCalls != 0 {
+		t.Fatalf(
+			"unserialized observer calls = %d, want 0",
+			unserializedObserverCalls,
+		)
+	}
+	if observerCalls != 1 {
+		t.Fatalf("snapshot observer calls = %d, want 1", observerCalls)
+	}
 	if database.snapshotCalls != 2 || database.saveCalls != 1 {
 		t.Fatalf(
 			"store calls = %d snapshots, %d saves; want 2 snapshots, 1 save",
@@ -317,6 +340,7 @@ func TestServerServesEmbeddedIndexWithoutRedirect(t *testing.T) {
 		"github.com",
 		"octocat",
 		testNotificationsSupported,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -343,6 +367,7 @@ func TestServerInstancesUseDistinctSessionCookies(t *testing.T) {
 		"github.com",
 		"octocat",
 		testNotificationsSupported,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("first New() error = %v", err)
@@ -353,6 +378,7 @@ func TestServerInstancesUseDistinctSessionCookies(t *testing.T) {
 		"github.com",
 		"hubot",
 		testNotificationsSupported,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("second New() error = %v", err)

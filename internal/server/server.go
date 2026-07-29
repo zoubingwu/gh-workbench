@@ -53,6 +53,7 @@ type Server struct {
 	host                   string
 	viewer                 string
 	notificationsSupported bool
+	observeSnapshot        func(context.Context, model.Snapshot)
 	session                string
 	cookieName             string
 	ui                     fs.FS
@@ -68,6 +69,7 @@ func New(
 	host string,
 	viewer string,
 	notificationsSupported bool,
+	observeSnapshot func(context.Context, model.Snapshot),
 ) (*Server, error) {
 	session, err := newSession()
 	if err != nil {
@@ -84,6 +86,7 @@ func New(
 		host:                   host,
 		viewer:                 viewer,
 		notificationsSupported: notificationsSupported,
+		observeSnapshot:        observeSnapshot,
 		session:                session,
 		cookieName:             sessionCookiePrefix + session[:16],
 		ui:                     ui,
@@ -107,7 +110,14 @@ func (s *Server) PublishSnapshot(
 	s.publicationMu.Lock()
 	defer s.publicationMu.Unlock()
 
-	return s.publishSnapshot(ctx)
+	snapshot, err := s.publishSnapshot(ctx)
+	if err != nil {
+		return model.Snapshot{}, err
+	}
+	if s.observeSnapshot != nil {
+		s.observeSnapshot(ctx, snapshot)
+	}
+	return snapshot, nil
 }
 
 func (s *Server) publishSnapshot(
@@ -244,7 +254,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		clientContext,
 		writeTimeout,
 	)
-	_, err = s.PublishSnapshot(publishContext)
+	s.publicationMu.Lock()
+	_, err = s.publishSnapshot(publishContext)
+	s.publicationMu.Unlock()
 	publishCancel()
 	if err != nil {
 		return
