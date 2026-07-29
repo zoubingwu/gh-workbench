@@ -508,6 +508,13 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 		OccurredAt: now.Add(-time.Minute),
 		URL:        "https://github.com/acme/api/pull/12#issuecomment-1",
 	}
+	commit := &model.Activity{
+		Kind:       "commit",
+		Actor:      "octocat",
+		BodyText:   "abcdef1 Cover retry case",
+		OccurredAt: now.Add(-3 * time.Minute),
+		URL:        "https://github.com/acme/api/commit/abcdef1234567890",
+	}
 	reviewComment := &model.Activity{
 		Kind:       "review_comment",
 		Actor:      "reviewer",
@@ -521,6 +528,7 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 		item.Number,
 		activityResource.Revision,
 		activity,
+		commit,
 		reviewComment,
 	)
 	if err != nil {
@@ -533,6 +541,33 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 			applied,
 		)
 	}
+	nextCommit := &model.Activity{
+		Kind:       "commit",
+		Actor:      "octocat",
+		BodyText:   "fedcba9 Add retry coverage",
+		OccurredAt: now.Add(-90 * time.Second),
+		URL:        "https://github.com/acme/api/commit/fedcba9876543210",
+	}
+	changed, applied, err = database.ReplaceActivity(
+		ctx,
+		item.RepositoryKey,
+		item.Number,
+		activityResource.Revision,
+		activity,
+		nextCommit,
+		reviewComment,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceActivity() commit cursor update error = %v", err)
+	}
+	if changed || !applied {
+		t.Fatalf(
+			"commit cursor update = changed %t, applied %t; want false, true",
+			changed,
+			applied,
+		)
+	}
+	commit = nextCommit
 
 	if _, err := database.ReplaceRelevantOpenItems(
 		ctx,
@@ -560,6 +595,22 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 			activity,
 		)
 	}
+	resources, err := database.loadResources(ctx, host)
+	if err != nil {
+		t.Fatalf("loadResources() after refresh error = %v", err)
+	}
+	loadedActivityResource := resources[model.ActivityResourceKey(
+		item.RepositoryKey,
+		item.Number,
+	)]
+	if loadedActivityResource.LatestCommit == nil ||
+		*loadedActivityResource.LatestCommit != *commit {
+		t.Fatalf(
+			"loadResources().LatestCommit = %#v, want %#v",
+			loadedActivityResource.LatestCommit,
+			commit,
+		)
+	}
 	due, err = database.ListDueResources(ctx, host, now.Add(time.Minute), 10)
 	if err != nil {
 		t.Fatalf("ListDueResources() after refresh error = %v", err)
@@ -567,6 +618,14 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 	for _, resource := range due {
 		if resource.Kind != model.ResourceKindActivity {
 			continue
+		}
+		if resource.LatestCommit == nil ||
+			*resource.LatestCommit != *commit {
+			t.Fatalf(
+				"LatestCommit = %#v, want %#v",
+				resource.LatestCommit,
+				commit,
+			)
 		}
 		if resource.LatestReviewComment == nil ||
 			*resource.LatestReviewComment != *reviewComment {
@@ -1019,6 +1078,7 @@ func TestStaleActivityPollDoesNotOverwriteHotReset(t *testing.T) {
 		stale.Revision,
 		initial,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("seed activity error: %v", err)
@@ -1049,6 +1109,7 @@ func TestStaleActivityPollDoesNotOverwriteHotReset(t *testing.T) {
 		item.Number,
 		stale.Revision,
 		staleActivity,
+		nil,
 		nil,
 	)
 	if err != nil {
@@ -1187,6 +1248,7 @@ func TestOpenMigratesWorkItemColumns(t *testing.T) {
 		"deletions",
 		"labels_json",
 		"latest_activity_json",
+		"latest_commit_json",
 		"latest_review_comment_json",
 		"missing_polls",
 	} {
@@ -1286,6 +1348,7 @@ func TestOpenClearsActivityETagWithoutReviewCommentCache(t *testing.T) {
 		item.RepositoryKey,
 		item.Number,
 		activityResource.Revision,
+		nil,
 		nil,
 		nil,
 	)

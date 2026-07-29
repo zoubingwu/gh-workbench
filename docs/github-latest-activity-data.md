@@ -9,14 +9,18 @@ Keep account-wide search as discovery, add each item's global `id`, deduplicate
 the five search result sets, then enrich due items in batches with
 `nodes(ids: $ids)`.
 
-Use three candidates and select the greatest activity timestamp:
+Use four candidates and select the greatest activity timestamp:
 
 1. `comments(first: 1, orderBy: {field: UPDATED_AT, direction: DESC})` for an
    Issue comment or pull request conversation comment.
-2. `timelineItems(last: 1, itemTypes: […])` for reviews and selected state
-   events such as label changes, reopen, review request, ready-for-review, and
-   draft conversion.
-3. For pull requests, one conditional REST request to
+2. `timelineItems(last: 1, itemTypes: […])` for conversation comments, reviews,
+   and selected state events such as label changes, reopen, review request,
+   ready-for-review, and draft conversion, plus the latest pull request commit.
+3. For pull requests, a dedicated
+   `timelineItems(last: 1, itemTypes: [PULL_REQUEST_REVIEW])` connection so an
+   update to the last submitted review remains comparable after a later commit
+   enters the mixed timeline.
+4. For pull requests, one conditional REST request to
    `GET /repos/{owner}/{repo}/pulls/{number}/comments?sort=updated&direction=desc&per_page=1`
    for the newest inline review comment or thread reply.
 
@@ -26,11 +30,15 @@ Persist one normalized value:
 kind, actor, bodyText, occurredAt, url
 ```
 
+Persist the latest pull request commit candidate independently so its first
+observed event clock remains stable while later activity becomes the rendered
+latest value.
+
 Collapse whitespace and truncate `bodyText` for display. Keep the complete
 permalink. A useful rendering is:
 
 ```text
-updated 21 minutes ago · alice commented: Please cover the retry case…
+updated 21 minutes ago · alice commented 15 minutes ago: Please cover the retry case…
 ```
 
 GitHub exposes `bodyText`, author, timestamps, and URLs on `IssueComment`,
@@ -47,6 +55,7 @@ comments use the same `IssueComment` type as Issue comments.
 | PR conversation comment | `PullRequest.comments` | same `IssueComment` fields |
 | Submitted PR review | `PullRequest.timelineItems` → `PullRequestReview` | `author.login`, `bodyText`, `state`, `submittedAt`, `updatedAt`, `url` |
 | Inline review comment or reply | REST pull review comments | `user.login`, `body_text`, `created_at`, `updated_at`, `html_url`, `pull_request_review_id` |
+| Pull request commit | `PullRequest.timelineItems` → `PullRequestCommit` | `PullRequest.updatedAt`, `committer.user.login`, `author.user.login`, `abbreviatedOid`, `messageHeadline`, `committedDate`, `url` |
 | Label change | timeline `LabeledEvent` / `UnlabeledEvent` | `actor.login`, `createdAt`, `label.name`, `label.color` |
 | State/review workflow | selected timeline event | `actor.login`, `createdAt`, event-specific fields |
 
@@ -60,8 +69,8 @@ to an older conversation comment as the latest comment candidate.
 types include `PULL_REQUEST_REVIEW`, `LABELED_EVENT`, `UNLABELED_EVENT`,
 `REOPENED_EVENT`, `REVIEW_REQUESTED_EVENT`,
 `REVIEW_REQUEST_REMOVED_EVENT`, `READY_FOR_REVIEW_EVENT`, and
-`CONVERT_TO_DRAFT_EVENT`. The Issue union includes Issue comments and its state
-and label events.
+`CONVERT_TO_DRAFT_EVENT`, plus `PULL_REQUEST_COMMIT`. The Issue union includes
+Issue comments and its state and label events.
 ([Issue timeline](https://docs.github.com/en/graphql/reference/issues),
 [pull request timeline](https://docs.github.com/en/graphql/reference/pulls))
 
@@ -126,6 +135,7 @@ query LatestActivity($ids: [ID!]!) {
         }
       }
       timelineItems(last: 1, itemTypes: [
+        ISSUE_COMMENT
         PULL_REQUEST_REVIEW
         LABELED_EVENT
         UNLABELED_EVENT
@@ -134,7 +144,59 @@ query LatestActivity($ids: [ID!]!) {
         REVIEW_REQUEST_REMOVED_EVENT
         READY_FOR_REVIEW_EVENT
         CONVERT_TO_DRAFT_EVENT
+        PULL_REQUEST_COMMIT
       ]) {
+        nodes {
+          __typename
+          ... on PullRequestReview {
+            author { login }
+            bodyText
+            state
+            submittedAt
+            updatedAt
+            url
+          }
+          ... on IssueComment {
+            author { login }
+            bodyText
+            createdAt
+            updatedAt
+            url
+          }
+          ... on PullRequestCommit {
+            url
+            commit {
+              abbreviatedOid
+              committedDate
+              messageHeadline
+              author { user { login } }
+              committer { user { login } }
+            }
+          }
+        }
+      }
+      latestCommit: timelineItems(
+        last: 1
+        itemTypes: [PULL_REQUEST_COMMIT]
+      ) {
+        nodes {
+          __typename
+          ... on PullRequestCommit {
+            url
+            commit {
+              abbreviatedOid
+              committedDate
+              messageHeadline
+              author { user { login } }
+              committer { user { login } }
+            }
+          }
+        }
+      }
+      latestReview: timelineItems(
+        last: 1
+        itemTypes: [PULL_REQUEST_REVIEW]
+      ) {
         nodes {
           __typename
           ... on PullRequestReview {
@@ -171,10 +233,12 @@ the abbreviated query above shows the connection layout.
 GitHub estimates GraphQL primary cost from the number of connection requests,
 divided by 100 and rounded, with a minimum cost of one. A 50-node enrichment
 with one comment connection and one timeline connection per item is roughly
-one point; `rateLimit.cost` is authoritative. Adding a scan of 100 review
-threads plus one comment connection per thread for 50 PRs is roughly 51
-points and requests about 10,000 nodes, so that query shape should stay out of
-the hot polling path.
+one point. Pull requests add connections for the independently cached latest
+commit and the latest review, making a 50-PR batch roughly two points.
+`rateLimit.cost` is authoritative. Adding a scan of 100 review threads plus
+one comment connection per thread for 50 PRs is roughly 51 points and requests
+about 10,000 nodes, so that query shape should stay out of the hot polling
+path.
 
 GraphQL user authentication normally has 5,000 points per hour. Connections
 require `first` or `last` values from 1 through 100, and a call may request at
@@ -201,6 +265,15 @@ account-wide list.
 - Review-thread resolution exposes current `isResolved` and `resolvedBy`.
   The read schema provides no resolution timestamp, so it cannot produce an
   exact “alice resolved this thread at …” latest activity.
+- `latestReview(last: 1)` follows timeline submission order. An update to an
+  earlier review after another review was submitted sits outside this
+  single-candidate window.
+- `PullRequestCommit` carries `committedDate` and has no timeline-event
+  timestamp. GitHub has retired `Commit.pushedDate`. The first observation
+  uses `PullRequest.updatedAt` as the available event clock when the commit is
+  the newest selected timeline activity and falls back to `committedDate`; the
+  persisted commit identity then keeps that clock stable. An initial hydration
+  after a later untracked metadata update can overestimate the push time.
 - Reactions are separate connections/resources and carry no timeline event.
   Keep the existing reaction poller independent.
 - Deleted comments may appear as `CommentDeletedEvent`; their body is gone.

@@ -285,7 +285,8 @@ func (m terminalModel) itemDetailLine(
 		if actor == "" {
 			actor = "ghost"
 		}
-		activity := actor + " " + activityVerb(latest.Kind)
+		activity := actor + " " + activityVerb(latest.Kind) + " " +
+			relativeTime(latest.OccurredAt, m.now())
 		if latest.BodyText != "" {
 			activity += ": " + terminalText(latest.BodyText)
 		}
@@ -445,6 +446,8 @@ func activityVerb(kind string) string {
 	switch kind {
 	case "comment":
 		return "commented"
+	case "commit":
+		return "committed"
 	case "review_comment":
 		return "left a review comment"
 	case "review_approved":

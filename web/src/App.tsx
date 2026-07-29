@@ -16,6 +16,7 @@ const SHOW_INACTIVE_STORAGE_KEY = "gh-workbench:show-inactive:v1";
 const LABEL_COLOR_PATTERN = /^#?([0-9a-f]{6})$/i;
 const activityVerbs: Readonly<Record<string, string>> = {
   comment: "commented",
+  commit: "committed",
   review_comment: "left a review comment",
   review_approved: "approved",
   review_changes_requested: "requested changes",
@@ -164,16 +165,19 @@ export function WorkItemRow({ item, now }: { item: WorkItem; now: number }) {
           </span>
           <span aria-hidden="true">·</span>
           <time dateTime={item.updatedAt} title={formatAbsoluteTime(item.updatedAt)}>
-            updated {formatRelativeTime(item.updatedAt)}
+            updated {formatRelativeTime(item.updatedAt, now)}
           </time>
           {item.latestActivity ? (
             <span className="latest-activity">
               <span aria-hidden="true">·</span>
-              <span
-                className="latest-activity-text"
-                title={formatAbsoluteTime(item.latestActivity.occurredAt)}
-              >
-                {item.latestActivity.actor || "ghost"} {activityVerb(item.latestActivity.kind)}
+              <span className="latest-activity-text">
+                {item.latestActivity.actor || "ghost"} {activityVerb(item.latestActivity.kind)}{" "}
+                <time
+                  dateTime={item.latestActivity.occurredAt}
+                  title={formatAbsoluteTime(item.latestActivity.occurredAt)}
+                >
+                  {formatRelativeTime(item.latestActivity.occurredAt, now)}
+                </time>
                 {item.latestActivity.bodyText ? `: ${item.latestActivity.bodyText}` : ""}
               </span>
             </span>

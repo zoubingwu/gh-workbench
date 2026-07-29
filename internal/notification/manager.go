@@ -14,6 +14,7 @@ const sendTimeout = 5 * time.Second
 
 var activityVerbs = map[string]string{
 	"comment":                  "commented",
+	"commit":                   "committed",
 	"review_comment":           "left a review comment",
 	"review_approved":          "approved",
 	"review_changes_requested": "requested changes",

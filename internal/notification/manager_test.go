@@ -24,6 +24,14 @@ func TestManagerUsesInitialSnapshotAsSilentBaseline(t *testing.T) {
 	}
 }
 
+func TestActivityVerbIncludesCommit(t *testing.T) {
+	t.Parallel()
+
+	if got, want := activityVerb("commit"), "committed"; got != want {
+		t.Fatalf("activityVerb(commit) = %q, want %q", got, want)
+	}
+}
+
 func TestManagerSendsNewItemsAndActivity(t *testing.T) {
 	t.Parallel()
 

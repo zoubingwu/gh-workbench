@@ -84,6 +84,15 @@ operating system's user cache directory in `gh-workbench`. The cache contains
 repository, issue, pull request, reaction, review, latest-activity, and
 notification preference data. GitHub Workbench sends no telemetry.
 
+Latest activity covers conversation comments, inline review comments and
+replies, submitted reviews, pull request commits, label changes, reopen
+events, review requests, and ready/draft transitions. Comment edits use their
+latest update time. A pull request commit's first observation uses the pull
+request update time as the available event clock when that commit is the
+newest selected timeline activity, with the Git commit time as a fallback.
+SQLite then keeps that clock stable for the commit identity. GitHub has retired
+the exact GraphQL push timestamp.
+
 On Linux, configure a Secret Service-compatible keyring before running
 `gh auth login`.
 

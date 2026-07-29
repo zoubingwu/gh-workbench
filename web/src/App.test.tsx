@@ -56,13 +56,36 @@ describe("WorkItemRow", () => {
             url: "https://github.com/acme/web/pull/42#issuecomment-1",
           },
         }}
-        now={Date.parse("2026-07-28T00:05:00Z")}
+        now={Date.parse("2026-07-28T00:20:00Z")}
       />,
     );
 
-    expect(markup).toContain("alice commented: Please cover the retry case.");
+    expect(markup).toContain("alice commented ");
+    expect(markup).toContain(">15 minutes ago</time>: Please cover the retry case.");
+    expect(markup).toContain('dateTime="2026-07-28T00:05:00Z"');
     expect(markup.indexOf("updated")).toBeLessThan(markup.indexOf("alice commented"));
     expect(markup.match(/<a\b/g)).toHaveLength(1);
+  });
+
+  it("renders a pull request commit as timed activity", () => {
+    const markup = renderToStaticMarkup(
+      <WorkItemRow
+        item={{
+          ...item,
+          latestActivity: {
+            kind: "commit",
+            actor: "alice",
+            bodyText: "abc1234 Cover the retry case",
+            occurredAt: "2026-07-28T00:17:00Z",
+            url: "https://github.com/acme/web/pull/42/commits/abc1234",
+          },
+        }}
+        now={Date.parse("2026-07-28T00:20:00Z")}
+      />,
+    );
+
+    expect(markup).toContain("alice committed ");
+    expect(markup).toContain(">3 minutes ago</time>: abc1234 Cover the retry case");
   });
 
   it("omits the redundant open status badge for issues", () => {
