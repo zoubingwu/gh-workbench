@@ -311,7 +311,7 @@ func selectionRail(selected bool) string {
 
 func itemSummary(item model.WorkItem) string {
 	if item.Kind == model.ItemKindPullRequest {
-		return style(
+		changes := style(
 			"+"+strconv.Itoa(item.Additions),
 			ansiGreen,
 		) +
@@ -320,8 +320,46 @@ func itemSummary(item model.WorkItem) string {
 				"-"+strconv.Itoa(item.Deletions),
 				ansiRed,
 			)
+		if activity := localAgentSummary(item.LocalAgentActivity); activity != "" {
+			return activity + "  " + changes
+		}
+		return changes
 	}
 	return labelSummary(item.Labels)
+}
+
+func localAgentSummary(activity *model.LocalAgentActivity) string {
+	if activity == nil {
+		return ""
+	}
+
+	providers := make([]string, 0, len(activity.Providers))
+	for _, provider := range activity.Providers {
+		if provider == "" {
+			continue
+		}
+		providers = append(
+			providers,
+			strings.ToUpper(provider[:1])+provider[1:],
+		)
+	}
+	if len(providers) == 0 {
+		providers = append(providers, "Local agent")
+	}
+
+	indicator := "●"
+	state := "working"
+	color := ansiCyan
+	if activity.State == model.LocalAgentStateNeedsInput {
+		state = "needs input"
+		color = ansiYellow
+	} else if activity.Confidence == model.LocalAgentConfidenceSupported {
+		indicator = "◌"
+	}
+	return style(
+		indicator+" "+terminalText(strings.Join(providers, " + "))+" "+state,
+		color,
+	)
 }
 
 func joinItemSummary(prefix, summary string, width int) string {

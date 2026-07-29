@@ -27,16 +27,20 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 			RepositoryCount: 2,
 			GeneratedAt:     time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC),
 			Notifications:   defaultPreferences,
-			Items:           make([]model.WorkItem, 0),
+			Items: []model.WorkItem{{
+				Kind: model.ItemKindPullRequest,
+			}},
 		},
 	}
 	controller := &fakeController{}
+	decorator := &fakeItemDecorator{}
 	server, err := New(
 		database,
 		controller,
 		"github.com",
 		"octocat",
 		testNotificationsSupported,
+		decorator,
 		nil,
 	)
 	if err != nil {
@@ -97,6 +101,15 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 			"notification support = %t, want %t",
 			snapshot.Notifications.Supported,
 			testNotificationsSupported,
+		)
+	}
+	if !decorator.called ||
+		len(snapshot.Items) != 1 ||
+		snapshot.Items[0].LocalAgentActivity == nil {
+		t.Fatalf(
+			"decorated snapshot = %#v, decorator called = %t",
+			snapshot.Items,
+			decorator.called,
 		)
 	}
 
@@ -244,6 +257,7 @@ func TestServerRejectsNonLoopbackHost(t *testing.T) {
 		"octocat",
 		testNotificationsSupported,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -273,6 +287,7 @@ func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
 		"github.com",
 		"octocat",
 		testNotificationsSupported,
+		nil,
 		func(_ context.Context, _ model.Snapshot) {
 			observerCalls++
 			if server.publicationMu.TryLock() {
@@ -341,6 +356,7 @@ func TestServerServesEmbeddedIndexWithoutRedirect(t *testing.T) {
 		"octocat",
 		testNotificationsSupported,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -368,6 +384,7 @@ func TestServerInstancesUseDistinctSessionCookies(t *testing.T) {
 		"octocat",
 		testNotificationsSupported,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("first New() error = %v", err)
@@ -378,6 +395,7 @@ func TestServerInstancesUseDistinctSessionCookies(t *testing.T) {
 		"github.com",
 		"hubot",
 		testNotificationsSupported,
+		nil,
 		nil,
 	)
 	if err != nil {
@@ -478,6 +496,22 @@ func (f *serializationCheckingStore) recordSerialization() {
 type fakeController struct {
 	running  bool
 	triggers int
+}
+
+type fakeItemDecorator struct {
+	called bool
+}
+
+func (f *fakeItemDecorator) Decorate(items []model.WorkItem) {
+	f.called = true
+	for index := range items {
+		items[index].LocalAgentActivity = &model.LocalAgentActivity{
+			State:        model.LocalAgentStateWorking,
+			Providers:    []string{"codex"},
+			SessionCount: 1,
+			Confidence:   model.LocalAgentConfidenceHeuristic,
+		}
+	}
 }
 
 func (f *fakeController) Trigger() {

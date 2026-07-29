@@ -119,20 +119,23 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 
 	items := []model.WorkItem{
 		{
-			RepositoryKey:  "github.com/acme/rocket",
-			Number:         7,
-			Kind:           model.ItemKindPullRequest,
-			Title:          "Ship the rocket",
-			URL:            "https://github.com/acme/rocket/pull/7",
-			State:          "open",
-			Author:         "octocat",
-			CreatedAt:      now.Add(-48 * time.Hour),
-			UpdatedAt:      now.Add(-time.Hour),
-			ReviewDecision: "review_required",
-			MergeState:     "blocked",
-			NeedsReview:    true,
-			Additions:      42,
-			Deletions:      7,
+			RepositoryKey:     "github.com/acme/rocket",
+			HeadRepositoryKey: "github.com/octocat/rocket",
+			HeadRefName:       "ship-rocket",
+			HeadRefOID:        "1111111111111111111111111111111111111111",
+			Number:            7,
+			Kind:              model.ItemKindPullRequest,
+			Title:             "Ship the rocket",
+			URL:               "https://github.com/acme/rocket/pull/7",
+			State:             "open",
+			Author:            "octocat",
+			CreatedAt:         now.Add(-48 * time.Hour),
+			UpdatedAt:         now.Add(-time.Hour),
+			ReviewDecision:    "review_required",
+			MergeState:        "blocked",
+			NeedsReview:       true,
+			Additions:         42,
+			Deletions:         7,
 		},
 		{
 			RepositoryKey: "github.com/octocat/satellite",
@@ -236,6 +239,11 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 	}
 	if !pullRequest.NeedsReview || pullRequest.ReviewDecision != "review_required" {
 		t.Fatalf("pull request review fields = %#v", pullRequest)
+	}
+	if pullRequest.HeadRepositoryKey != "github.com/octocat/rocket" ||
+		pullRequest.HeadRefName != "ship-rocket" ||
+		pullRequest.HeadRefOID != "1111111111111111111111111111111111111111" {
+		t.Fatalf("pull request head identity = %#v", pullRequest)
 	}
 	if len(pullRequest.Reactions) != 1 ||
 		pullRequest.Reactions[0].Content != "eyes" {
@@ -1257,6 +1265,9 @@ func TestOpenMigratesWorkItemColumns(t *testing.T) {
 		"latest_activity_json",
 		"latest_commit_json",
 		"latest_review_comment_json",
+		"head_repository",
+		"head_ref_name",
+		"head_ref_oid",
 		"missing_polls",
 	} {
 		if _, ok := columns[name]; !ok {

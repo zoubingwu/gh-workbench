@@ -64,6 +64,13 @@ is closed. The `gh workbench` process must remain running. The “Only my PRs”
 setting also controls which pull request activity can produce a system
 notification.
 
+Pull request rows show local Codex and Claude Code activity when a running
+session's Git checkout matches the pull request head repository, branch, or
+commit. Discovery is automatic and read-only, using local metadata with zero
+configuration. Codex activity is inferred from lifecycle records. Claude Code
+activity uses the live session registry, plus the official session JSON command
+while its background supervisor is running.
+
 Upgrade or remove the extension with:
 
 ```sh
@@ -92,6 +99,14 @@ request update time as the available event clock when that commit is the
 newest selected timeline activity, with the Git commit time as a fallback.
 SQLite then keeps that clock stable for the commit identity. GitHub has retired
 the exact GraphQL push timestamp.
+
+Local coding-agent activity remains ephemeral and is added only to UI
+snapshots. The observer reads Codex thread metadata, lifecycle event types, and
+explicit tool working-directory fields. Prompt, response, reasoning, command,
+and tool-output content stays outside the snapshot and Workbench cache. The
+Claude live session registry is read directly. The documented daemon status
+command gates the official session JSON query, keeping a stopped supervisor
+stopped. `CODEX_HOME` and `CLAUDE_CONFIG_DIR` are respected when set.
 
 On Linux, configure a Secret Service-compatible keyring before running
 `gh auth login`.

@@ -18,6 +18,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/auth"
 	"github.com/cli/go-gh/v2/pkg/browser"
+	"github.com/zoubingwu/gh-workbench/internal/agentstatus"
 	"github.com/zoubingwu/gh-workbench/internal/github"
 	"github.com/zoubingwu/gh-workbench/internal/model"
 	"github.com/zoubingwu/gh-workbench/internal/notification"
@@ -139,18 +140,28 @@ func Run(ctx context.Context, options Options) error {
 	}
 
 	snapshotUpdates := make(chan struct{}, 1)
-	runner := syncer.New(database, githubClient, host, viewer, workerCount, func() {
+	notifySnapshot := func() {
 		select {
 		case snapshotUpdates <- struct{}{}:
 		default:
 		}
-	})
+	}
+	agentObserver := agentstatus.New(notifySnapshot)
+	runner := syncer.New(
+		database,
+		githubClient,
+		host,
+		viewer,
+		workerCount,
+		notifySnapshot,
+	)
 	if options.UI == UITUI {
 		return runTerminalUI(
 			ctx,
 			options,
 			database,
 			runner,
+			agentObserver,
 			snapshotUpdates,
 			host,
 			viewer,
@@ -194,6 +205,7 @@ func Run(ctx context.Context, options Options) error {
 		host,
 		viewer,
 		notification.Supported,
+		agentObserver,
 		func(observeContext context.Context, snapshot model.Snapshot) {
 			if err := notificationManager.Observe(
 				observeContext,
@@ -230,7 +242,7 @@ func Run(ctx context.Context, options Options) error {
 		return fmt.Errorf("load initial workbench snapshot: %w", err)
 	}
 
-	results := make(chan error, 3)
+	results := make(chan error, 4)
 	go func() {
 		err := httpServer.Serve(listener)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -240,6 +252,9 @@ func Run(ctx context.Context, options Options) error {
 	}()
 	go func() {
 		results <- runner.Run(runContext)
+	}()
+	go func() {
+		results <- agentObserver.Run(runContext)
 	}()
 	go func() {
 		publish := func() {
@@ -301,7 +316,7 @@ func Run(ctx context.Context, options Options) error {
 		runErr = fmt.Errorf("shut down local server: %w", err)
 	}
 
-	for received < 3 {
+	for received < 4 {
 		select {
 		case err := <-results:
 			received++
@@ -319,10 +334,11 @@ func Run(ctx context.Context, options Options) error {
 }
 
 type terminalSnapshotSource struct {
-	database *store.Store
-	runner   *syncer.Runner
-	host     string
-	viewer   string
+	database  *store.Store
+	runner    *syncer.Runner
+	decorator server.ItemDecorator
+	host      string
+	viewer    string
 }
 
 func (s terminalSnapshotSource) Snapshot(
@@ -338,6 +354,9 @@ func (s terminalSnapshotSource) Snapshot(
 		return model.Snapshot{}, err
 	}
 	snapshot.Viewer = s.viewer
+	if s.decorator != nil {
+		s.decorator.Decorate(snapshot.Items)
+	}
 	return snapshot, nil
 }
 
@@ -346,6 +365,7 @@ func runTerminalUI(
 	options Options,
 	database *store.Store,
 	runner *syncer.Runner,
+	agentObserver *agentstatus.Observer,
 	snapshotUpdates <-chan struct{},
 	host string,
 	viewer string,
@@ -354,17 +374,21 @@ func runTerminalUI(
 	defer cancel()
 
 	launcher := browser.New("", io.Discard, io.Discard)
-	results := make(chan error, 2)
+	results := make(chan error, 3)
 	go func() {
 		results <- runner.Run(runContext)
 	}()
 	go func() {
+		results <- agentObserver.Run(runContext)
+	}()
+	go func() {
 		results <- tui.Run(runContext, tui.Options{
 			Source: terminalSnapshotSource{
-				database: database,
-				runner:   runner,
-				host:     host,
-				viewer:   viewer,
+				database:  database,
+				runner:    runner,
+				decorator: agentObserver,
+				host:      host,
+				viewer:    viewer,
 			},
 			Updates: snapshotUpdates,
 			Trigger: runner.Trigger,
@@ -388,7 +412,7 @@ func runTerminalUI(
 		shutdownPeriod,
 	)
 	defer shutdownCancel()
-	for received < 2 {
+	for received < 3 {
 		select {
 		case err := <-results:
 			received++

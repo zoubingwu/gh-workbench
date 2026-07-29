@@ -182,4 +182,50 @@ describe("WorkItemRow", () => {
     expect(markup).not.toContain('aria-label="Labels"');
     expect(markup).not.toContain(">bug</li>");
   });
+
+  it("renders local coding-agent activity on a pull request", () => {
+    const markup = renderToStaticMarkup(
+      <WorkItemRow
+        item={{
+          ...item,
+          localAgentActivity: {
+            state: "working",
+            providers: ["claude", "codex"],
+            sessionCount: 2,
+            confidence: "supported",
+          },
+        }}
+        now={Date.parse("2026-07-28T00:00:00Z")}
+        displayTime={Date.parse("2026-07-28T00:00:00Z")}
+      />,
+    );
+
+    expect(markup).toContain('class="agent-activity"');
+    expect(markup).toContain('data-state="working"');
+    expect(markup).toContain('data-confidence="supported"');
+    expect(markup).toContain("Claude + Codex working");
+    expect(markup).toContain("2 local sessions");
+  });
+
+  it("labels heuristic Codex activity", () => {
+    const markup = renderToStaticMarkup(
+      <WorkItemRow
+        item={{
+          ...item,
+          localAgentActivity: {
+            state: "working",
+            providers: ["codex"],
+            sessionCount: 1,
+            confidence: "heuristic",
+          },
+        }}
+        now={Date.parse("2026-07-28T00:00:00Z")}
+        displayTime={Date.parse("2026-07-28T00:00:00Z")}
+      />,
+    );
+
+    expect(markup).toContain("Codex working");
+    expect(markup).toContain('data-confidence="heuristic"');
+    expect(markup).toContain("Observed from local lifecycle records");
+  });
 });

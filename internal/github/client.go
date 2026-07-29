@@ -328,6 +328,17 @@ func (c *Client) searchOpenItems(
 			if node.TypeName == "PullRequest" {
 				kind = model.ItemKindPullRequest
 			}
+			headRepositoryKey := ""
+			if node.HeadRepository.NameWithOwner != "" {
+				headRepository, err := repositoryFromNameWithOwner(
+					host,
+					node.HeadRepository.NameWithOwner,
+				)
+				if err != nil {
+					return nil, err
+				}
+				headRepositoryKey = headRepository.Key()
+			}
 			labels := make([]model.Label, 0, len(node.Labels.Nodes))
 			for _, label := range node.Labels.Nodes {
 				labels = append(labels, model.Label{
@@ -336,25 +347,28 @@ func (c *Client) searchOpenItems(
 				})
 			}
 			items = append(items, model.WorkItem{
-				NodeID:         node.ID,
-				Repository:     repository.FullName(),
-				RepositoryKey:  repository.Key(),
-				Number:         node.Number,
-				Kind:           kind,
-				Title:          node.Title,
-				URL:            node.URL,
-				State:          strings.ToLower(node.State),
-				Author:         login(node.Author),
-				CreatedAt:      node.CreatedAt,
-				UpdatedAt:      node.UpdatedAt,
-				IsDraft:        node.IsDraft,
-				ReviewDecision: normalizeGraphQLEnum(node.ReviewDecision),
-				MergeState:     normalizeGraphQLEnum(node.MergeStateStatus),
-				NeedsReview:    needsReview,
-				Additions:      node.Additions,
-				Deletions:      node.Deletions,
-				Labels:         labels,
-				Reactions:      make([]model.Reaction, 0),
+				NodeID:            node.ID,
+				Repository:        repository.FullName(),
+				RepositoryKey:     repository.Key(),
+				HeadRepositoryKey: headRepositoryKey,
+				HeadRefName:       node.HeadRefName,
+				HeadRefOID:        node.HeadRefOID,
+				Number:            node.Number,
+				Kind:              kind,
+				Title:             node.Title,
+				URL:               node.URL,
+				State:             strings.ToLower(node.State),
+				Author:            login(node.Author),
+				CreatedAt:         node.CreatedAt,
+				UpdatedAt:         node.UpdatedAt,
+				IsDraft:           node.IsDraft,
+				ReviewDecision:    normalizeGraphQLEnum(node.ReviewDecision),
+				MergeState:        normalizeGraphQLEnum(node.MergeStateStatus),
+				NeedsReview:       needsReview,
+				Additions:         node.Additions,
+				Deletions:         node.Deletions,
+				Labels:            labels,
+				Reactions:         make([]model.Reaction, 0),
 			})
 		}
 
@@ -1149,6 +1163,11 @@ query RelevantOpenItems($query: String!, $after: String) {
         repository {
           nameWithOwner
         }
+        headRepository {
+          nameWithOwner
+        }
+        headRefName
+        headRefOid
         isDraft
         reviewDecision
         mergeStateStatus
@@ -1465,6 +1484,11 @@ type graphQLSearchNode struct {
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
+	HeadRepository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"headRepository"`
+	HeadRefName string `json:"headRefName"`
+	HeadRefOID  string `json:"headRefOid"`
 }
 
 type graphQLError struct {
