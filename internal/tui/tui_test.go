@@ -356,6 +356,27 @@ func TestViewFitsTerminalWidthAndKeepsReactionSummary(t *testing.T) {
 	}
 }
 
+func TestItemTitleLineKeepsSelectionRailWithOneColumnPrefix(t *testing.T) {
+	t.Parallel()
+
+	current := terminalModel{width: 20}
+	item := model.WorkItem{
+		Kind:  model.ItemKindPullRequest,
+		Title: "Selected item",
+		Reactions: []model.Reaction{
+			{Content: "eyes"},
+		},
+	}
+
+	line := ansi.Strip(current.itemTitleLine(item, true))
+	if !strings.HasPrefix(line, "▌") {
+		t.Fatalf("title line missing selection rail: %q", line)
+	}
+	if summary := "+0 -0  ·  👀 1"; !strings.Contains(line, summary) {
+		t.Fatalf("title line missing summary %q: %q", summary, line)
+	}
+}
+
 func TestViewFillsTerminalHeight(t *testing.T) {
 	t.Parallel()
 

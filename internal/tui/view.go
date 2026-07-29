@@ -372,7 +372,7 @@ func joinItemSummary(prefix, summary string, width int) string {
 	separator := "  ·  "
 	suffix := separator + summary
 	prefixWidth := width - ansi.StringWidth(suffix)
-	if prefixWidth < 1 {
+	if prefixWidth <= 1 {
 		leading := ansi.Cut(prefix, 0, min(max(width, 0), 1))
 		return leading + truncateLeft(
 			suffix,
