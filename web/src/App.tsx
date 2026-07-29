@@ -446,11 +446,6 @@ function App() {
       onlyMyPullRequests: nextValue,
     });
 
-  const toggleNotifications = () =>
-    saveNotificationPreferences({
-      enabled: !notificationsEnabled,
-    });
-
   const syncNow = async () => {
     setRequestingSync(true);
     setTransportError(null);
@@ -511,21 +506,6 @@ function App() {
         </div>
 
         <div className="header-actions">
-          <button
-            className="sync-button notification-button"
-            type="button"
-            onClick={() => void toggleNotifications()}
-            disabled={!snapshot || !notificationsSupported || savingNotifications}
-            aria-pressed={notificationsSupported && notificationsEnabled}
-          >
-            {savingNotifications
-              ? "Saving notifications"
-              : !notificationsSupported
-                ? "Notifications unavailable"
-                : notificationsEnabled
-                  ? "Notifications on"
-                  : "Enable notifications"}
-          </button>
           <button className="sync-button" type="button" onClick={syncNow} disabled={isSyncing}>
             <span className={isSyncing ? "sync-icon spinning" : "sync-icon"} aria-hidden="true">
               ↻
@@ -558,6 +538,21 @@ function App() {
           ))}
         </nav>
         <div className="view-options">
+          <label className="list-toggle">
+            <input
+              type="checkbox"
+              checked={notificationsEnabled}
+              onChange={(event) => {
+                void saveNotificationPreferences({
+                  enabled: event.currentTarget.checked,
+                });
+              }}
+              disabled={!snapshot || !notificationsSupported || savingNotifications}
+            />
+            <span>
+              {notificationsSupported ? "System notifications" : "System notifications unavailable"}
+            </span>
+          </label>
           <label className="list-toggle">
             <input
               type="checkbox"

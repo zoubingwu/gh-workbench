@@ -139,10 +139,6 @@ h1 {
   cursor: wait;
 }
 
-.notification-button:disabled {
-  cursor: not-allowed;
-}
-
 .sync-button:focus-visible,
 .filter-button:focus-visible,
 .list-toggle input:focus-visible {
@@ -265,6 +261,10 @@ h1 {
   height: 16px;
   margin: 0;
   accent-color: var(--accent-emphasis);
+}
+
+.list-toggle:has(input:disabled) {
+  cursor: not-allowed;
 }
 
 .repository-results {
