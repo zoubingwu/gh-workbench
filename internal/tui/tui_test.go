@@ -287,7 +287,7 @@ func TestModelShowsSyncAndSnapshotErrors(t *testing.T) {
 	}
 }
 
-func TestViewFitsTerminalWidth(t *testing.T) {
+func TestViewFitsTerminalWidthAndKeepsReactionSummary(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -312,6 +312,18 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 					Title:      strings.Repeat("long title ", 10),
 					Author:     "alice",
 					UpdatedAt:  now,
+					Additions:  123,
+					Deletions:  45,
+					LocalAgentActivity: &model.LocalAgentActivity{
+						State:      model.LocalAgentStateWorking,
+						Providers:  []string{"claude", "codex"},
+						Confidence: model.LocalAgentConfidenceSupported,
+					},
+					Reactions: []model.Reaction{
+						{Content: "eyes"},
+						{Content: "+1"},
+						{Content: "heart"},
+					},
 				},
 			},
 		},
@@ -325,6 +337,43 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 		if width := ansi.StringWidth(line); width > 42 {
 			t.Fatalf("line width = %d, want <= 42: %q", width, line)
 		}
+	}
+	lines := strings.Split(ansi.Strip(view.Content), "\n")
+	summary := "👀 1 👍 1 ♥ 1"
+	titleLine := lines[lineContaining(t, lines, summary)]
+	if !strings.HasPrefix(titleLine, "▌") {
+		t.Fatalf("narrow title line missing selection rail: %q", titleLine)
+	}
+	if changesAndReactions := "+123 -45  ·  " + summary; !strings.Contains(
+		titleLine,
+		changesAndReactions,
+	) {
+		t.Fatalf(
+			"narrow title line missing %q: %q",
+			changesAndReactions,
+			titleLine,
+		)
+	}
+}
+
+func TestItemTitleLineKeepsSelectionRailWithOneColumnPrefix(t *testing.T) {
+	t.Parallel()
+
+	current := terminalModel{width: 20}
+	item := model.WorkItem{
+		Kind:  model.ItemKindPullRequest,
+		Title: "Selected item",
+		Reactions: []model.Reaction{
+			{Content: "eyes"},
+		},
+	}
+
+	line := ansi.Strip(current.itemTitleLine(item, true))
+	if !strings.HasPrefix(line, "▌") {
+		t.Fatalf("title line missing selection rail: %q", line)
+	}
+	if summary := "+0 -0  ·  👀 1"; !strings.Contains(line, summary) {
+		t.Fatalf("title line missing summary %q: %q", summary, line)
 	}
 }
 
@@ -614,7 +663,7 @@ func TestSelectedItemUsesCompactBrowserRow(t *testing.T) {
 	titleLine := lines[titleIndex]
 	if !strings.Contains(
 		titleLine,
-		"⑂ Approved Compact work item  ·  +10 -2",
+		"⑂ Approved Compact work item  ·  +10 -2  ·  👀 1",
 	) {
 		t.Fatalf("compact title line has unexpected order: %q", titleLine)
 	}
@@ -625,7 +674,7 @@ func TestSelectedItemUsesCompactBrowserRow(t *testing.T) {
 	}
 
 	detailLine := lines[titleIndex+1]
-	if !strings.Contains(detailLine, "👀 1 · #7") {
+	if !strings.Contains(detailLine, "#7 · opened by alice") {
 		t.Fatalf("compact detail line has unexpected order: %q", detailLine)
 	}
 	for _, value := range []string{
@@ -725,9 +774,22 @@ func TestViewKeepsStructuredDetailsVisibleForEveryItem(t *testing.T) {
 	})
 
 	lines := strings.Split(ansi.Strip(current.View().Content), "\n")
+	firstTitleIndex := lineContaining(t, lines, first.Title)
 	titleIndex := lineContaining(t, lines, "Second work item")
 	if titleIndex+2 >= len(lines) {
 		t.Fatalf("compact row ended outside rendered view:\n%s", strings.Join(lines, "\n"))
+	}
+	numberColumn := func(line, number string) int {
+		t.Helper()
+		index := strings.Index(line, number)
+		if index < 0 {
+			t.Fatalf("detail line missing %q: %q", number, line)
+		}
+		return ansi.StringWidth(line[:index])
+	}
+	if got, want := numberColumn(lines[titleIndex+1], "#8"),
+		numberColumn(lines[firstTitleIndex+1], "#7"); got != want {
+		t.Fatalf("PR number columns = [%d %d], want equal", want, got)
 	}
 	row := strings.Join(lines[titleIndex:titleIndex+2], "\n")
 	for _, value := range []string{

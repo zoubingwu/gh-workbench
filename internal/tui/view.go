@@ -255,9 +255,16 @@ func (m terminalModel) itemTitleLine(
 		line += style(status, statusColor(status)) + " "
 	}
 	line += title
+	summary := itemSummary(item)
+	if reactions := reactionSummary(item.Reactions); reactions != "" {
+		if summary != "" {
+			summary += "  ·  "
+		}
+		summary += reactions
+	}
 	line = joinItemSummary(
 		line,
-		itemSummary(item),
+		summary,
 		m.width,
 	)
 	return line
@@ -271,15 +278,11 @@ func (m terminalModel) itemDetailLine(
 	if author == "" {
 		author = "ghost"
 	}
-	parts := []string{}
-	if reactions := reactionSummary(item.Reactions); reactions != "" {
-		parts = append(parts, reactions)
-	}
-	parts = append(parts,
+	parts := []string{
 		fmt.Sprintf("#%d", item.Number),
-		"opened by "+author,
-		"updated "+relativeTime(item.UpdatedAt, m.now()),
-	)
+		"opened by " + author,
+		"updated " + relativeTime(item.UpdatedAt, m.now()),
+	}
 	if latest := item.LatestActivity; latest != nil {
 		actor := terminalText(latest.Actor)
 		if actor == "" {
@@ -369,8 +372,12 @@ func joinItemSummary(prefix, summary string, width int) string {
 	separator := "  ·  "
 	suffix := separator + summary
 	prefixWidth := width - ansi.StringWidth(suffix)
-	if prefixWidth < 1 {
-		return prefix + suffix
+	if prefixWidth <= 1 {
+		leading := ansi.Cut(prefix, 0, min(max(width, 0), 1))
+		return leading + truncateLeft(
+			suffix,
+			width-ansi.StringWidth(leading),
+		)
 	}
 	return truncate(prefix, prefixWidth) + suffix
 }
@@ -624,4 +631,27 @@ func truncate(value string, width int) string {
 		return ""
 	}
 	return ansi.Truncate(value, width, "…")
+}
+
+func truncateLeft(value string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	valueWidth := ansi.StringWidth(value)
+	if valueWidth <= width {
+		return value
+	}
+
+	const prefix = "…"
+	if width <= ansi.StringWidth(prefix) {
+		return prefix
+	}
+	cutWidth := valueWidth - width + ansi.StringWidth(prefix)
+	for {
+		truncated := ansi.TruncateLeft(value, cutWidth, prefix)
+		if ansi.StringWidth(truncated) <= width {
+			return truncated
+		}
+		cutWidth++
+	}
 }
