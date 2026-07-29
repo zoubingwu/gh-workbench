@@ -1225,12 +1225,43 @@ func TestModelTriggersSyncAndOpensSelectedItem(t *testing.T) {
 		t.Fatal("open command = nil")
 	}
 	message := command()
-	current = updateModel(t, current, message)
+	updated, expiry := current.Update(message)
+	current = updated.(terminalModel)
 	if openedURL != item.URL {
 		t.Fatalf("opened URL = %q, want %q", openedURL, item.URL)
 	}
 	if !strings.Contains(current.action, "Opened") {
 		t.Fatalf("action = %q, want open confirmation", current.action)
+	}
+	if expiry == nil {
+		t.Fatal("open confirmation expiry command = nil")
+	}
+
+	expiredVersion := current.actionVersion
+	notificationsEnabled := true
+	current = updateModel(t, current, notificationPreferencesUpdatedMsg{
+		update: model.NotificationPreferencesUpdate{
+			Enabled: &notificationsEnabled,
+		},
+	})
+	current = updateModel(t, current, actionExpiredMsg{
+		version: expiredVersion,
+		action:  "Opened acme/api #7",
+	})
+	if current.action != "System notifications enabled" {
+		t.Fatalf("action = %q, want newer action preserved", current.action)
+	}
+
+	current = updateModel(t, current, openResultMsg{
+		repository: item.Repository,
+		number:     item.Number,
+	})
+	current = updateModel(t, current, actionExpiredMsg{
+		version: current.actionVersion,
+		action:  current.action,
+	})
+	if current.action != "" {
+		t.Fatalf("action = %q, want expired confirmation cleared", current.action)
 	}
 }
 

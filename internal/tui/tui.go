@@ -12,7 +12,10 @@ import (
 	"github.com/zoubingwu/gh-workbench/internal/model"
 )
 
-const inactiveAfter = 30 * 24 * time.Hour
+const (
+	inactiveAfter        = 30 * 24 * time.Hour
+	openedActionDuration = 2 * time.Second
+)
 
 type SnapshotSource interface {
 	Snapshot(context.Context) (model.Snapshot, error)
@@ -77,6 +80,7 @@ type terminalModel struct {
 	loaded                        bool
 	loadError                     error
 	action                        string
+	actionVersion                 uint64
 	filter                        itemFilter
 	onlyMine                      bool
 	showInactive                  bool
@@ -105,6 +109,11 @@ type openResultMsg struct {
 type notificationPreferencesUpdatedMsg struct {
 	update model.NotificationPreferencesUpdate
 	err    error
+}
+
+type actionExpiredMsg struct {
+	version uint64
+	action  string
 }
 
 func newModel(
@@ -155,13 +164,19 @@ func (m terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case openResultMsg:
 		if message.err != nil {
-			m.action = "Open failed: " + message.err.Error()
+			m.setAction("Open failed: " + message.err.Error())
 		} else {
-			m.action = fmt.Sprintf(
+			m.setAction(fmt.Sprintf(
 				"Opened %s #%d",
 				message.repository,
 				message.number,
-			)
+			))
+			return m, m.expireAction()
+		}
+	case actionExpiredMsg:
+		if message.version == m.actionVersion &&
+			message.action == m.action {
+			m.action = ""
 		}
 	case notificationPreferencesUpdatedMsg:
 		m.savingNotificationPreferences = false
@@ -248,21 +263,25 @@ func (m terminalModel) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if m.trigger != nil {
 			m.trigger()
-			m.action = "Sync requested"
+			m.setAction("Sync requested")
 			return m, nil
 		}
-		m.action = "Sync is unavailable"
+		m.setAction("Sync is unavailable")
 	case "enter", "o":
 		item, ok := m.selectedItem()
 		if !ok {
-			m.action = "No work item selected"
+			m.setAction("No work item selected")
 			return m, nil
 		}
 		if m.openURL == nil {
-			m.action = "Opening links is unavailable"
+			m.setAction("Opening links is unavailable")
 			return m, nil
 		}
-		m.action = fmt.Sprintf("Opening %s #%d", item.Repository, item.Number)
+		m.setAction(fmt.Sprintf(
+			"Opening %s #%d",
+			item.Repository,
+			item.Number,
+		))
 		return m, func() tea.Msg {
 			return openResultMsg{
 				repository: item.Repository,
@@ -286,6 +305,22 @@ func (m terminalModel) saveNotificationPreferences(
 			),
 		}
 	}
+}
+
+func (m *terminalModel) setAction(action string) {
+	m.action = action
+	m.actionVersion++
+}
+
+func (m terminalModel) expireAction() tea.Cmd {
+	version := m.actionVersion
+	action := m.action
+	return tea.Tick(openedActionDuration, func(time.Time) tea.Msg {
+		return actionExpiredMsg{
+			version: version,
+			action:  action,
+		}
+	})
 }
 
 func (m terminalModel) loadSnapshot() tea.Cmd {
