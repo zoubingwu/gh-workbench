@@ -61,10 +61,15 @@ func parseArguments(
 	var (
 		options     app.Options
 		showVersion bool
-		uiValue     = string(app.UIBrowser)
 	)
 	flags := flag.NewFlagSet("gh-workbench", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.BoolVar(
+		&options.Browser,
+		"browser",
+		false,
+		"use the browser interface",
+	)
 	flags.StringVar(
 		&options.DataDir,
 		"data-dir",
@@ -72,16 +77,10 @@ func parseArguments(
 		"directory for the local SQLite cache",
 	)
 	flags.BoolVar(
-		&options.NoBrowser,
-		"no-browser",
+		&options.NoOpen,
+		"no-open",
 		false,
-		"print the authenticated local URL instead of opening a browser",
-	)
-	flags.StringVar(
-		&uiValue,
-		"ui",
-		uiValue,
-		"user interface: browser or tui",
+		"print the authenticated local URL for manual opening",
 	)
 	flags.BoolVar(
 		&showVersion,
@@ -92,12 +91,6 @@ func parseArguments(
 	if err := flags.Parse(arguments); err != nil {
 		return app.Options{}, false, err
 	}
-
-	ui, err := app.ParseUI(uiValue)
-	if err != nil {
-		return app.Options{}, false, err
-	}
-	options.UI = ui
 
 	return options, showVersion, nil
 }

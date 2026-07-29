@@ -21,24 +21,25 @@ event routing, redraw scheduling, and every terminal lifecycle edge.
 
 ## CLI contract
 
-Add one enum-style option:
+Use the terminal interface by default and select browser behavior with boolean
+options:
 
 ```text
-gh workbench --ui browser
-gh workbench --ui tui
+gh workbench
+gh workbench --browser
+gh workbench --browser --no-open
 ```
 
-- `--ui browser` is the default and preserves today's behavior.
-- `--ui tui` starts the account store, GitHub client, and sync runner, then
-  occupies the current terminal with the TUI.
-- The existing `--no-browser` remains the browser-mode URL-only path.
-  Combining it with `--ui tui` returns a usage error.
-- Any other `--ui` value returns a usage error listing `browser` and `tui`.
+- The default command starts the account store, GitHub client, and sync runner,
+  then occupies the current terminal with the TUI.
+- `--browser` starts the loopback HTTP server and browser interface.
+- `--browser --no-open` prints the authenticated local URL for manual opening.
+- Using `--no-open` without `--browser` returns a usage error.
 - TUI mode requires interactive stdin and stdout. Terminal validation should
   happen before account synchronization starts.
 
-An enum leaves room for future presentation modes while keeping the default
-command backward-compatible.
+Two boolean flags keep the two-mode contract direct and make the terminal
+interface the zero-value path.
 
 ## Minimal useful TUI
 
@@ -166,8 +167,8 @@ introduction.
 
 ## Implementation validation
 
-- Unit-test CLI parsing, defaults, invalid values, and the
-  `--ui tui --no-browser` conflict.
+- Unit-test CLI parsing, defaults, replaced flags, and the requirement that
+  `--no-open` accompanies `--browser`.
 - Unit-test selection, paging, resize, snapshot replacement, sync state,
   error display, and key actions by calling the Bubble Tea model directly.
 - Assert that selection remains stable by repository, number, and kind across

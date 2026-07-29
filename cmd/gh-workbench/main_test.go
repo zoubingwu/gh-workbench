@@ -5,8 +5,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/zoubingwu/gh-workbench/internal/app"
 )
 
 func TestRunPrintsVersion(t *testing.T) {
@@ -49,27 +47,35 @@ func TestRunPrintsHelpWithoutStartingApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
-	if !strings.Contains(stderr.String(), "-ui string") {
-		t.Fatalf("help output = %q, want --ui flag", stderr.String())
+	for _, flagName := range []string{"-browser", "-no-open"} {
+		if !strings.Contains(stderr.String(), flagName) {
+			t.Fatalf("help output = %q, want %s flag", stderr.String(), flagName)
+		}
 	}
 }
 
-func TestParseArgumentsSelectsUI(t *testing.T) {
+func TestParseArgumentsSelectsInterface(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name      string
 		arguments []string
-		expected  app.UI
+		browser   bool
+		noOpen    bool
 	}{
 		{
-			name:     "browser by default",
-			expected: app.UIBrowser,
+			name: "terminal ui by default",
 		},
 		{
-			name:      "terminal ui",
-			arguments: []string{"--ui", "tui"},
-			expected:  app.UITUI,
+			name:      "browser interface",
+			arguments: []string{"--browser"},
+			browser:   true,
+		},
+		{
+			name:      "browser interface without automatic opening",
+			arguments: []string{"--browser", "--no-open"},
+			browser:   true,
+			noOpen:    true,
 		},
 	}
 
@@ -87,41 +93,75 @@ func TestParseArgumentsSelectsUI(t *testing.T) {
 			if showVersion {
 				t.Fatal("showVersion = true, want false")
 			}
-			if options.UI != test.expected {
-				t.Fatalf("UI = %q, want %q", options.UI, test.expected)
+			if options.Browser != test.browser {
+				t.Fatalf(
+					"Browser = %t, want %t",
+					options.Browser,
+					test.browser,
+				)
+			}
+			if options.NoOpen != test.noOpen {
+				t.Fatalf(
+					"NoOpen = %t, want %t",
+					options.NoOpen,
+					test.noOpen,
+				)
 			}
 		})
 	}
 }
 
-func TestParseArgumentsRejectsInvalidUI(t *testing.T) {
+func TestParseArgumentsRejectsReplacedFlags(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := parseArguments(
-		[]string{"--ui", "desktop"},
-		&bytes.Buffer{},
-	)
-	if err == nil {
-		t.Fatal("parseArguments() error = nil, want an error")
-	}
-	if !strings.Contains(err.Error(), `invalid ui "desktop"`) {
-		t.Fatalf("parseArguments() error = %q", err)
+	for _, flagName := range []string{"--ui", "--no-browser"} {
+		t.Run(flagName, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := parseArguments(
+				[]string{flagName},
+				&bytes.Buffer{},
+			)
+			if err == nil {
+				t.Fatal("parseArguments() error = nil, want an error")
+			}
+			if !strings.Contains(err.Error(), "flag provided but not defined") {
+				t.Fatalf("parseArguments() error = %q", err)
+			}
+		})
 	}
 }
 
-func TestRunRejectsNoBrowserWithTUI(t *testing.T) {
+func TestRunRejectsNoOpenWithoutBrowser(t *testing.T) {
 	t.Parallel()
 
 	err := run(
 		context.Background(),
-		[]string{"--ui", "tui", "--no-browser"},
+		[]string{"--no-open"},
 		&bytes.Buffer{},
 		&bytes.Buffer{},
 	)
 	if err == nil {
 		t.Fatal("run() error = nil, want an error")
 	}
-	if !strings.Contains(err.Error(), "--no-browser and --ui tui") {
+	if !strings.Contains(err.Error(), "--no-open requires --browser") {
+		t.Fatalf("run() error = %q", err)
+	}
+}
+
+func TestRunUsesTerminalInterfaceByDefault(t *testing.T) {
+	t.Parallel()
+
+	err := run(
+		context.Background(),
+		nil,
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+	if err == nil {
+		t.Fatal("run() error = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "terminal UI requires") {
 		t.Fatalf("run() error = %q", err)
 	}
 }

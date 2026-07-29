@@ -24,23 +24,21 @@ gh extension install zoubingwu/gh-workbench
 gh workbench
 ```
 
-GitHub Workbench starts a loopback service and opens its browser UI. The
-extension includes the Go service, SQLite driver, and frontend assets in one
-platform-specific executable.
+GitHub Workbench starts its terminal interface by default. TUI mode requires
+interactive standard input and output. The extension includes the Go service,
+SQLite driver, and frontend assets in one platform-specific executable.
 
-Use the terminal interface with:
+Use the browser interface with:
 
 ```sh
-gh workbench --ui tui
+gh workbench --browser
 ```
 
-TUI mode requires interactive standard input and output.
-
-Browser mode remains the default. It also supports printing the authenticated
-local URL for manual opening:
+Browser mode starts a loopback service and opens the browser. It also supports
+printing the authenticated local URL for manual opening:
 
 ```sh
-gh workbench --ui browser --no-browser
+gh workbench --browser --no-open
 ```
 
 The terminal interface groups work by repository and shows the same account,

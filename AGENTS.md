@@ -1,8 +1,9 @@
 # GitHub Workbench architecture
 
 GitHub Workbench is a GitHub CLI extension named `gh-workbench`. The executable
-offers a browser interface backed by a loopback Go service and embedded React
-application, plus an in-process terminal interface selected with `--ui tui`.
+offers an in-process terminal interface by default and a browser interface
+selected with `--browser`, backed by a loopback Go service and embedded React
+application.
 One process represents the active `gh` account and aggregates relevant open
 issues and pull requests through account-wide GitHub search. Relevance means
 authored, assigned, mentioned, reviewed, or review-requested. Account caches are
