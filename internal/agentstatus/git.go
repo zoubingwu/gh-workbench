@@ -37,7 +37,10 @@ func resolveGitIdentity(ctx context.Context, directory string) (gitIdentity, err
 		remoteName = "origin"
 	}
 
-	identity := gitIdentity{branch: branch, sha: sha}
+	identity := gitIdentity{
+		branch: resolvePushBranch(ctx, directory, remoteName, branch),
+		sha:    sha,
+	}
 	remoteURL, err := gitOutput(
 		ctx,
 		directory,
@@ -54,6 +57,32 @@ func resolveGitIdentity(ctx context.Context, directory string) (gitIdentity, err
 		return gitIdentity{}, fmt.Errorf("parse git remote: %w", err)
 	}
 	return identity, nil
+}
+
+func resolvePushBranch(
+	ctx context.Context,
+	directory string,
+	remoteName string,
+	localBranch string,
+) string {
+	for _, revision := range []string{"@{push}", "@{upstream}"} {
+		ref, err := gitOutput(
+			ctx,
+			directory,
+			"rev-parse",
+			"--abbrev-ref",
+			"--symbolic-full-name",
+			revision,
+		)
+		if err != nil {
+			continue
+		}
+		branch, found := strings.CutPrefix(ref, remoteName+"/")
+		if found && branch != "" {
+			return branch
+		}
+	}
+	return localBranch
 }
 
 func gitConfigValue(

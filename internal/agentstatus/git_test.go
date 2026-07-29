@@ -117,6 +117,60 @@ func TestResolveGitIdentityPrefersPushRemote(t *testing.T) {
 	}
 }
 
+func TestResolveGitIdentityUsesUpstreamBranchName(t *testing.T) {
+	t.Parallel()
+
+	fixture := t.TempDir()
+	remote := filepath.Join(fixture, "remote.git")
+	repository := filepath.Join(fixture, "work")
+	runGit(t, fixture, "init", "--bare", remote)
+	runGit(t, fixture, "init", "-b", "local-work", repository)
+	runGit(t, repository, "remote", "add", "origin", remote)
+	runGit(
+		t,
+		repository,
+		"-c",
+		"user.name=Test",
+		"-c",
+		"user.email=test@example.com",
+		"commit",
+		"--allow-empty",
+		"-m",
+		"fixture",
+	)
+	runGit(t, repository, "push", "--set-upstream", "origin", "HEAD:pr-head")
+	runGit(
+		t,
+		repository,
+		"-c",
+		"user.name=Test",
+		"-c",
+		"user.email=test@example.com",
+		"commit",
+		"--allow-empty",
+		"-m",
+		"local only",
+	)
+	runGit(
+		t,
+		repository,
+		"remote",
+		"set-url",
+		"origin",
+		"git@github.com:octocat/rocket.git",
+	)
+
+	identity, err := resolveGitIdentity(context.Background(), repository)
+	if err != nil {
+		t.Fatalf("resolveGitIdentity() error = %v", err)
+	}
+	if identity.repositoryKey != "github.com/octocat/rocket" ||
+		identity.branch != "pr-head" ||
+		identity.sha != runGit(t, repository, "rev-parse", "HEAD") {
+		t.Fatalf("resolveGitIdentity() = %#v", identity)
+	}
+}
+
 func runGit(t *testing.T, directory string, arguments ...string) string {
 	t.Helper()
 
