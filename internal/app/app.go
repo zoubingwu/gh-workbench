@@ -39,6 +39,7 @@ const (
 type Options struct {
 	Browser bool
 	DataDir string
+	Demo    bool
 	NoOpen  bool
 	Stdin   io.Reader
 	Stdout  io.Writer
@@ -62,6 +63,9 @@ func Run(ctx context.Context, options Options) error {
 		if err := validateTUIStreams(options.Stdin, options.Stdout); err != nil {
 			return err
 		}
+	}
+	if options.Demo {
+		return runDemo(ctx, options)
 	}
 
 	host, _ := auth.DefaultHost()
@@ -184,15 +188,6 @@ func Run(ctx context.Context, options Options) error {
 		)
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("listen on loopback: %w", err)
-	}
-	defer listener.Close()
-
-	runContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	var snapshotWarning sync.Once
 	reportSnapshotError := func(err error) {
 		snapshotWarning.Do(func() {
@@ -217,14 +212,8 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 
-	httpServer := &http.Server{
-		Handler:           localServer.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
 	initialContext, initialCancel := context.WithTimeout(
-		runContext,
+		ctx,
 		shutdownPeriod,
 	)
 	_, err = localServer.PublishSnapshot(initialContext)
@@ -233,7 +222,58 @@ func Run(ctx context.Context, options Options) error {
 		return fmt.Errorf("load initial workbench snapshot: %w", err)
 	}
 
-	results := make(chan error, 4)
+	return serveLocal(
+		ctx,
+		options,
+		localServer,
+		viewer+"@"+host,
+		runner.Run,
+		agentObserver.Run,
+		func(runContext context.Context) error {
+			publish := func() {
+				publishContext, publishCancel := context.WithTimeout(
+					runContext,
+					shutdownPeriod,
+				)
+				defer publishCancel()
+
+				_, err := localServer.PublishSnapshot(publishContext)
+				if err != nil {
+					reportSnapshotError(err)
+				}
+			}
+			return publishSnapshots(
+				runContext,
+				snapshotUpdates,
+				publish,
+			)
+		},
+	)
+}
+
+func serveLocal(
+	ctx context.Context,
+	options Options,
+	localServer *server.Server,
+	identity string,
+	tasks ...func(context.Context) error,
+) error {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("listen on loopback: %w", err)
+	}
+	defer listener.Close()
+
+	httpServer := &http.Server{
+		Handler:           localServer.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	runContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	processCount := len(tasks) + 1
+	results := make(chan error, processCount)
 	go func() {
 		err := httpServer.Serve(listener)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -241,38 +281,18 @@ func Run(ctx context.Context, options Options) error {
 		}
 		results <- err
 	}()
-	go func() {
-		results <- runner.Run(runContext)
-	}()
-	go func() {
-		results <- agentObserver.Run(runContext)
-	}()
-	go func() {
-		publish := func() {
-			publishContext, publishCancel := context.WithTimeout(
-				runContext,
-				shutdownPeriod,
-			)
-			defer publishCancel()
-
-			_, err := localServer.PublishSnapshot(publishContext)
-			if err != nil {
-				reportSnapshotError(err)
-			}
-		}
-		results <- publishSnapshots(
-			runContext,
-			snapshotUpdates,
-			publish,
-		)
-	}()
+	for _, task := range tasks {
+		go func(runTask func(context.Context) error) {
+			results <- runTask(runContext)
+		}(task)
+	}
 
 	baseURL := "http://" + listener.Addr().String()
 	sessionURL := baseURL + localServer.SessionPath()
 	_, _ = fmt.Fprintf(
 		options.Stdout,
 		"GitHub Workbench is running for %s at %s\n",
-		viewer+"@"+host,
+		identity,
 		baseURL,
 	)
 	if options.NoOpen {
@@ -307,7 +327,7 @@ func Run(ctx context.Context, options Options) error {
 		runErr = fmt.Errorf("shut down local server: %w", err)
 	}
 
-	for received < 4 {
+	for received < processCount {
 		select {
 		case err := <-results:
 			received++

@@ -77,6 +77,12 @@ func parseArguments(
 		"directory for the local SQLite cache",
 	)
 	flags.BoolVar(
+		&options.Demo,
+		"demo",
+		false,
+		"run with built-in synthetic data",
+	)
+	flags.BoolVar(
 		&options.NoOpen,
 		"no-open",
 		false,

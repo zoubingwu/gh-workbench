@@ -6,9 +6,15 @@ work authored by, assigned to, mentioning, reviewed by, or awaiting review from
 the active `gh` account across repositories, stores an account-scoped cache in
 SQLite, and keeps the selected UI current through adaptive polling.
 
-![GitHub Workbench showing synthetic pull requests and issues](docs/github-workbench-demo.jpg)
+Browser interface:
 
-The screenshot uses synthetic repositories and work items.
+![GitHub Workbench browser interface showing synthetic pull requests and issues](docs/github-workbench-demo.jpg)
+
+Terminal interface:
+
+![GitHub Workbench terminal interface showing the same synthetic pull requests and issues](docs/github-workbench-demo-tui.png)
+
+Both screenshots use the built-in synthetic repositories and work items.
 
 ## Install
 
@@ -134,6 +140,22 @@ make dev
 `make dev` builds the frontend and starts the account workbench from this
 checkout. After installation, `gh workbench` starts from any directory. Set
 `GH_HOST` when selecting an authenticated GitHub Enterprise host.
+
+For local screenshots, build the frontend once and start either UI with the
+built-in synthetic snapshot:
+
+```sh
+pnpm --dir web build
+
+# Browser
+go run ./cmd/gh-workbench --demo --browser
+
+# Terminal
+go run ./cmd/gh-workbench --demo
+```
+
+Demo mode runs entirely from memory and leaves GitHub credentials, GitHub APIs,
+and the SQLite cache untouched.
 
 ## Install as a local extension
 
