@@ -36,33 +36,13 @@ const (
 	workerCount    = 4
 )
 
-type UI string
-
-const (
-	UIBrowser UI = "browser"
-	UITUI     UI = "tui"
-)
-
-func ParseUI(value string) (UI, error) {
-	ui := UI(value)
-	switch ui {
-	case UIBrowser, UITUI:
-		return ui, nil
-	default:
-		return "", fmt.Errorf(
-			"invalid ui %q; expected browser or tui",
-			value,
-		)
-	}
-}
-
 type Options struct {
-	DataDir   string
-	NoBrowser bool
-	UI        UI
-	Stdin     io.Reader
-	Stdout    io.Writer
-	Stderr    io.Writer
+	Browser bool
+	DataDir string
+	NoOpen  bool
+	Stdin   io.Reader
+	Stdout  io.Writer
+	Stderr  io.Writer
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -75,18 +55,10 @@ func Run(ctx context.Context, options Options) error {
 	if options.Stderr == nil {
 		options.Stderr = os.Stderr
 	}
-	if options.UI == "" {
-		options.UI = UIBrowser
+	if options.NoOpen && !options.Browser {
+		return fmt.Errorf("--no-open requires --browser")
 	}
-	if _, err := ParseUI(string(options.UI)); err != nil {
-		return err
-	}
-	if options.NoBrowser && options.UI == UITUI {
-		return fmt.Errorf(
-			"--no-browser and --ui tui cannot be used together",
-		)
-	}
-	if options.UI == UITUI {
+	if !options.Browser {
 		if err := validateTUIStreams(options.Stdin, options.Stdout); err != nil {
 			return err
 		}
@@ -155,7 +127,7 @@ func Run(ctx context.Context, options Options) error {
 		workerCount,
 		notifySnapshot,
 	)
-	if options.UI == UITUI {
+	if !options.Browser {
 		return runTerminalUI(
 			ctx,
 			options,
@@ -284,7 +256,7 @@ func Run(ctx context.Context, options Options) error {
 		viewer+"@"+host,
 		baseURL,
 	)
-	if options.NoBrowser {
+	if options.NoOpen {
 		_, _ = fmt.Fprintf(options.Stdout, "Open %s\n", sessionURL)
 	} else {
 		launcher := browser.New("", options.Stdout, options.Stderr)
@@ -444,7 +416,7 @@ func validateTUIStreams(input io.Reader, output io.Writer) error {
 		!term.IsTerminal(int(inputFile.Fd())) ||
 		!term.IsTerminal(int(outputFile.Fd())) {
 		return fmt.Errorf(
-			"--ui tui requires an interactive terminal on stdin and stdout",
+			"terminal UI requires an interactive terminal on stdin and stdout",
 		)
 	}
 	return nil
