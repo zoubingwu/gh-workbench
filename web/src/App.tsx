@@ -366,14 +366,6 @@ function App() {
       if (!response.ok) {
         throw new Error(`Notification settings failed with HTTP ${response.status}`);
       }
-      setSnapshot((current) =>
-        current
-          ? {
-              ...current,
-              notifications: { ...current.notifications, ...update },
-            }
-          : current,
-      );
     } catch (error) {
       setTransportError(errorMessage(error));
     } finally {
