@@ -57,12 +57,19 @@ export type SyncState = {
   error?: string | null;
 };
 
+export type NotificationPreferences = {
+  supported: boolean;
+  enabled: boolean;
+  onlyMyPullRequests: boolean;
+};
+
 export type Snapshot = {
   host: string;
   viewer: string;
   repositoryCount: number;
   generatedAt: string;
   sync: SyncState;
+  notifications: NotificationPreferences;
   items: WorkItem[];
 };
 

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -19,6 +20,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/browser"
 	"github.com/zoubingwu/gh-workbench/internal/github"
 	"github.com/zoubingwu/gh-workbench/internal/model"
+	"github.com/zoubingwu/gh-workbench/internal/notification"
 	"github.com/zoubingwu/gh-workbench/internal/server"
 	"github.com/zoubingwu/gh-workbench/internal/store"
 	"github.com/zoubingwu/gh-workbench/internal/syncer"
@@ -161,7 +163,46 @@ func Run(ctx context.Context, options Options) error {
 	}
 	defer listener.Close()
 
-	localServer, err := server.New(database, runner, host, viewer)
+	runContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var notificationWarning sync.Once
+	reportNotificationError := func(err error) {
+		notificationWarning.Do(func() {
+			_, _ = fmt.Fprintf(
+				options.Stderr,
+				"System notifications are unavailable: %v\n",
+				err,
+			)
+		})
+	}
+	var snapshotWarning sync.Once
+	reportSnapshotError := func(err error) {
+		snapshotWarning.Do(func() {
+			_, _ = fmt.Fprintf(
+				options.Stderr,
+				"Snapshot publication failed: %v\n",
+				err,
+			)
+		})
+	}
+	notificationManager := notification.New(notification.SystemSender())
+
+	localServer, err := server.New(
+		database,
+		runner,
+		host,
+		viewer,
+		notification.Supported,
+		func(observeContext context.Context, snapshot model.Snapshot) {
+			if err := notificationManager.Observe(
+				observeContext,
+				snapshot,
+			); err != nil {
+				reportNotificationError(err)
+			}
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -171,8 +212,23 @@ func Run(ctx context.Context, options Options) error {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	runContext, cancel := context.WithCancel(ctx)
-	defer cancel()
+
+	baselineContext, baselineCancel := context.WithTimeout(
+		runContext,
+		shutdownPeriod,
+	)
+	baselineItems, err := database.NotificationBaselineItems(
+		baselineContext,
+		host,
+	)
+	if err == nil {
+		notificationManager.Seed(baselineItems)
+		_, err = localServer.PublishSnapshot(baselineContext)
+	}
+	baselineCancel()
+	if err != nil {
+		return fmt.Errorf("load initial workbench snapshot: %w", err)
+	}
 
 	results := make(chan error, 3)
 	go func() {
@@ -186,10 +242,22 @@ func Run(ctx context.Context, options Options) error {
 		results <- runner.Run(runContext)
 	}()
 	go func() {
+		publish := func() {
+			publishContext, publishCancel := context.WithTimeout(
+				runContext,
+				shutdownPeriod,
+			)
+			defer publishCancel()
+
+			_, err := localServer.PublishSnapshot(publishContext)
+			if err != nil {
+				reportSnapshotError(err)
+			}
+		}
 		results <- publishSnapshots(
 			runContext,
 			snapshotUpdates,
-			localServer.PublishSnapshot,
+			publish,
 		)
 	}()
 

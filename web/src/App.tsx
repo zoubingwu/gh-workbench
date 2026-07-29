@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { filterItems, type ItemFilter } from "./filterItems";
 import { formatAbsoluteTime, formatRelativeTime, reactionSymbol } from "./format";
-import type { Reaction, Snapshot, SnapshotEvent, WorkItem } from "./types";
+import type { NotificationPreferences, Reaction, Snapshot, SnapshotEvent, WorkItem } from "./types";
 import {
   filterByActivity,
   filterByPullRequestAuthor,
@@ -13,7 +13,6 @@ import {
 type ConnectionState = "connecting" | "connected" | "disconnected";
 
 const SHOW_INACTIVE_STORAGE_KEY = "gh-workbench:show-inactive:v1";
-const ONLY_MY_PULL_REQUESTS_STORAGE_KEY = "gh-workbench:only-my-pull-requests:v1";
 const LABEL_COLOR_PATTERN = /^#?([0-9a-f]{6})$/i;
 const activityVerbs: Readonly<Record<string, string>> = {
   comment: "commented",
@@ -208,16 +207,13 @@ function App() {
       return false;
     }
   });
-  const [onlyMyPullRequests, setOnlyMyPullRequests] = useState(() => {
-    try {
-      return window.localStorage.getItem(ONLY_MY_PULL_REQUESTS_STORAGE_KEY) !== "false";
-    } catch {
-      return true;
-    }
-  });
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [requestingSync, setRequestingSync] = useState(false);
+  const [savingNotifications, setSavingNotifications] = useState(false);
   const [transportError, setTransportError] = useState<string | null>(null);
+  const notificationsSupported = snapshot?.notifications.supported ?? false;
+  const notificationsEnabled = snapshot?.notifications.enabled ?? false;
+  const onlyMyPullRequests = snapshot?.notifications.onlyMyPullRequests ?? true;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -352,14 +348,40 @@ function App() {
     }
   };
 
-  const updateOnlyMyPullRequests = (nextValue: boolean) => {
-    setOnlyMyPullRequests(nextValue);
+  const saveNotificationPreferences = async (
+    update: Partial<Pick<NotificationPreferences, "enabled" | "onlyMyPullRequests">>,
+  ) => {
+    setSavingNotifications(true);
+    setTransportError(null);
     try {
-      window.localStorage.setItem(ONLY_MY_PULL_REQUESTS_STORAGE_KEY, String(nextValue));
-    } catch {
-      // Browser storage can be unavailable in restricted contexts.
+      const response = await fetch("/api/notifications", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(update),
+      });
+      if (!response.ok) {
+        throw new Error(`Notification settings failed with HTTP ${response.status}`);
+      }
+    } catch (error) {
+      setTransportError(errorMessage(error));
+    } finally {
+      setSavingNotifications(false);
     }
   };
+
+  const updateOnlyMyPullRequests = (nextValue: boolean) =>
+    saveNotificationPreferences({
+      onlyMyPullRequests: nextValue,
+    });
+
+  const toggleNotifications = () =>
+    saveNotificationPreferences({
+      enabled: !notificationsEnabled,
+    });
 
   const syncNow = async () => {
     setRequestingSync(true);
@@ -420,12 +442,29 @@ function App() {
           </div>
         </div>
 
-        <button className="sync-button" type="button" onClick={syncNow} disabled={isSyncing}>
-          <span className={isSyncing ? "sync-icon spinning" : "sync-icon"} aria-hidden="true">
-            ↻
-          </span>
-          {isSyncing ? "Syncing" : "Sync now"}
-        </button>
+        <div className="header-actions">
+          <button
+            className="sync-button notification-button"
+            type="button"
+            onClick={() => void toggleNotifications()}
+            disabled={!snapshot || !notificationsSupported || savingNotifications}
+            aria-pressed={notificationsSupported && notificationsEnabled}
+          >
+            {savingNotifications
+              ? "Saving notifications"
+              : !notificationsSupported
+                ? "Notifications unavailable"
+                : notificationsEnabled
+                  ? "Notifications on"
+                  : "Enable notifications"}
+          </button>
+          <button className="sync-button" type="button" onClick={syncNow} disabled={isSyncing}>
+            <span className={isSyncing ? "sync-icon spinning" : "sync-icon"} aria-hidden="true">
+              ↻
+            </span>
+            {isSyncing ? "Syncing" : "Sync now"}
+          </button>
+        </div>
       </header>
 
       {displayedError ? (
@@ -455,7 +494,10 @@ function App() {
             <input
               type="checkbox"
               checked={onlyMyPullRequests}
-              onChange={(event) => updateOnlyMyPullRequests(event.currentTarget.checked)}
+              onChange={(event) => {
+                void updateOnlyMyPullRequests(event.currentTarget.checked);
+              }}
+              disabled={!snapshot || savingNotifications}
             />
             <span>Only my PRs</span>
           </label>

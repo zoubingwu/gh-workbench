@@ -12,6 +12,91 @@ import (
 	"github.com/zoubingwu/gh-workbench/internal/model"
 )
 
+func TestStorePersistsNotificationPreferences(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "preferences.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	preferences, err := database.NotificationPreferences(ctx)
+	if err != nil {
+		t.Fatalf("NotificationPreferences() error = %v", err)
+	}
+	expectedDefaults := model.NotificationPreferences{
+		OnlyMyPullRequests: true,
+	}
+	if preferences != expectedDefaults {
+		t.Fatalf("default preferences = %#v, want %#v", preferences, expectedDefaults)
+	}
+
+	enabled := true
+	if err := database.UpdateNotificationPreferences(
+		ctx,
+		model.NotificationPreferencesUpdate{Enabled: &enabled},
+	); err != nil {
+		t.Fatalf("UpdateNotificationPreferences(enabled) error = %v", err)
+	}
+	preferences, err = database.NotificationPreferences(ctx)
+	if err != nil {
+		t.Fatalf("NotificationPreferences() after enabled update error = %v", err)
+	}
+	expectedEnabled := model.NotificationPreferences{
+		Enabled:            true,
+		OnlyMyPullRequests: true,
+	}
+	if preferences != expectedEnabled {
+		t.Fatalf(
+			"preferences after enabled update = %#v, want %#v",
+			preferences,
+			expectedEnabled,
+		)
+	}
+
+	onlyMyPullRequests := false
+	if err := database.UpdateNotificationPreferences(
+		ctx,
+		model.NotificationPreferencesUpdate{
+			OnlyMyPullRequests: &onlyMyPullRequests,
+		},
+	); err != nil {
+		t.Fatalf("UpdateNotificationPreferences(only my PRs) error = %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	preferences, err = reopened.NotificationPreferences(ctx)
+	if err != nil {
+		t.Fatalf("reopened NotificationPreferences() error = %v", err)
+	}
+	expected := model.NotificationPreferences{Enabled: true}
+	if preferences != expected {
+		t.Fatalf("reopened preferences = %#v, want %#v", preferences, expected)
+	}
+
+	snapshot, err := reopened.Snapshot(ctx, "github.com", false, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if snapshot.Notifications != expected {
+		t.Fatalf("Snapshot().Notifications = %#v, want %#v", snapshot.Notifications, expected)
+	}
+}
+
 func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +299,16 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 	if len(snapshot.Items) != 1 {
 		t.Fatalf("visible items after removal = %d, want 1", len(snapshot.Items))
 	}
+	baselineItems, err := database.NotificationBaselineItems(ctx, host)
+	if err != nil {
+		t.Fatalf("NotificationBaselineItems() after removal error = %v", err)
+	}
+	if len(baselineItems) != 2 {
+		t.Fatalf(
+			"notification baseline items after removal = %d, want 2",
+			len(baselineItems),
+		)
+	}
 
 	for miss := 2; miss <= missingPollsBeforeDelete; miss++ {
 		changed, err = database.ReplaceRelevantOpenItems(
@@ -228,6 +323,33 @@ func TestStoreReconcilesRelevantOpenItemsAndReactions(t *testing.T) {
 		if changed {
 			t.Fatalf("missing poll %d changed = true, want false", miss)
 		}
+		if miss < missingPollsBeforeDelete {
+			baselineItems, err = database.NotificationBaselineItems(ctx, host)
+			if err != nil {
+				t.Fatalf(
+					"NotificationBaselineItems() after missing poll %d error = %v",
+					miss,
+					err,
+				)
+			}
+			if len(baselineItems) != 2 {
+				t.Fatalf(
+					"notification baseline items after missing poll %d = %d, want 2",
+					miss,
+					len(baselineItems),
+				)
+			}
+		}
+	}
+	baselineItems, err = database.NotificationBaselineItems(ctx, host)
+	if err != nil {
+		t.Fatalf("NotificationBaselineItems() after confirmed removal error = %v", err)
+	}
+	if len(baselineItems) != 1 {
+		t.Fatalf(
+			"notification baseline items after confirmed removal = %d, want 1",
+			len(baselineItems),
+		)
 	}
 	due, err = database.ListDueResources(ctx, host, now.Add(10*time.Minute), 10)
 	if err != nil {

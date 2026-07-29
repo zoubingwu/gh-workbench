@@ -124,13 +124,25 @@ type SyncStatus struct {
 	Error       string     `json:"error,omitempty"`
 }
 
+type NotificationPreferences struct {
+	Supported          bool `json:"supported"`
+	Enabled            bool `json:"enabled"`
+	OnlyMyPullRequests bool `json:"onlyMyPullRequests"`
+}
+
+type NotificationPreferencesUpdate struct {
+	Enabled            *bool `json:"enabled,omitempty"`
+	OnlyMyPullRequests *bool `json:"onlyMyPullRequests,omitempty"`
+}
+
 type Snapshot struct {
-	Host            string     `json:"host"`
-	Viewer          string     `json:"viewer"`
-	RepositoryCount int        `json:"repositoryCount"`
-	GeneratedAt     time.Time  `json:"generatedAt"`
-	Sync            SyncStatus `json:"sync"`
-	Items           []WorkItem `json:"items"`
+	Host            string                  `json:"host"`
+	Viewer          string                  `json:"viewer"`
+	RepositoryCount int                     `json:"repositoryCount"`
+	GeneratedAt     time.Time               `json:"generatedAt"`
+	Sync            SyncStatus              `json:"sync"`
+	Notifications   NotificationPreferences `json:"notifications"`
+	Items           []WorkItem              `json:"items"`
 }
 
 type PollResource struct {

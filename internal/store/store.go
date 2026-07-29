@@ -109,6 +109,18 @@ CREATE TABLE IF NOT EXISTS poll_resources (
 	revision INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS notification_preferences (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	enabled INTEGER NOT NULL DEFAULT 0,
+	only_my_pull_requests INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT OR IGNORE INTO notification_preferences (
+	id,
+	enabled,
+	only_my_pull_requests
+) VALUES (1, 0, 1);
+
 CREATE INDEX IF NOT EXISTS poll_resources_due
 	ON poll_resources(repository, next_poll_at);
 `
@@ -117,6 +129,59 @@ CREATE INDEX IF NOT EXISTS poll_resources_due
 	}
 	if err := s.migrateWorkItemColumns(ctx); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *Store) NotificationPreferences(
+	ctx context.Context,
+) (model.NotificationPreferences, error) {
+	var preferences model.NotificationPreferences
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT enabled, only_my_pull_requests
+		FROM notification_preferences
+		WHERE id = 1`,
+	).Scan(
+		&preferences.Enabled,
+		&preferences.OnlyMyPullRequests,
+	); err != nil {
+		return model.NotificationPreferences{}, fmt.Errorf(
+			"load notification preferences: %w",
+			err,
+		)
+	}
+	return preferences, nil
+}
+
+func (s *Store) UpdateNotificationPreferences(
+	ctx context.Context,
+	update model.NotificationPreferencesUpdate,
+) error {
+	var (
+		statement string
+		value     bool
+	)
+	switch {
+	case update.Enabled != nil && update.OnlyMyPullRequests == nil:
+		statement = `UPDATE notification_preferences
+			SET enabled = ?
+			WHERE id = 1`
+		value = *update.Enabled
+	case update.Enabled == nil && update.OnlyMyPullRequests != nil:
+		statement = `UPDATE notification_preferences
+			SET only_my_pull_requests = ?
+			WHERE id = 1`
+		value = *update.OnlyMyPullRequests
+	default:
+		return errors.New("update exactly one notification preference")
+	}
+	if _, err := s.db.ExecContext(
+		ctx,
+		statement,
+		value,
+	); err != nil {
+		return fmt.Errorf("update notification preferences: %w", err)
 	}
 	return nil
 }
@@ -1138,11 +1203,15 @@ func (s *Store) Snapshot(
 	running bool,
 	now time.Time,
 ) (model.Snapshot, error) {
-	items, err := s.loadItems(ctx, scope)
+	items, err := s.loadItems(ctx, scope, 0)
 	if err != nil {
 		return model.Snapshot{}, err
 	}
 	resources, err := s.loadResources(ctx, scope)
+	if err != nil {
+		return model.Snapshot{}, err
+	}
+	preferences, err := s.NotificationPreferences(ctx)
 	if err != nil {
 		return model.Snapshot{}, err
 	}
@@ -1190,13 +1259,22 @@ func (s *Store) Snapshot(
 			LastSuccess: lastSuccess,
 			Error:       syncError,
 		},
-		Items: items,
+		Notifications: preferences,
+		Items:         items,
 	}, nil
+}
+
+func (s *Store) NotificationBaselineItems(
+	ctx context.Context,
+	scope string,
+) ([]model.WorkItem, error) {
+	return s.loadItems(ctx, scope, missingPollsBeforeDelete-1)
 }
 
 func (s *Store) loadItems(
 	ctx context.Context,
 	scope string,
+	maxMissingPolls int,
 ) ([]model.WorkItem, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -1221,10 +1299,11 @@ func (s *Store) loadItems(
 			latest_activity_json
 		FROM work_items
 		WHERE (repository = ? OR repository GLOB ?)
-			AND missing_polls = 0
+			AND missing_polls <= ?
 		ORDER BY updated_at DESC, number DESC`,
 		scope,
 		scope+"/*",
+		maxMissingPolls,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load snapshot work items: %w", err)
