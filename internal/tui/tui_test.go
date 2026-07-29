@@ -614,7 +614,7 @@ func TestSelectedItemUsesCompactBrowserRow(t *testing.T) {
 	titleLine := lines[titleIndex]
 	if !strings.Contains(
 		titleLine,
-		"⑂ Approved Compact work item  ·  +10 -2",
+		"⑂ Approved Compact work item  ·  +10 -2  ·  👀 1",
 	) {
 		t.Fatalf("compact title line has unexpected order: %q", titleLine)
 	}
@@ -625,7 +625,7 @@ func TestSelectedItemUsesCompactBrowserRow(t *testing.T) {
 	}
 
 	detailLine := lines[titleIndex+1]
-	if !strings.Contains(detailLine, "👀 1 · #7") {
+	if !strings.Contains(detailLine, "#7 · opened by alice") {
 		t.Fatalf("compact detail line has unexpected order: %q", detailLine)
 	}
 	for _, value := range []string{
@@ -725,9 +725,22 @@ func TestViewKeepsStructuredDetailsVisibleForEveryItem(t *testing.T) {
 	})
 
 	lines := strings.Split(ansi.Strip(current.View().Content), "\n")
+	firstTitleIndex := lineContaining(t, lines, first.Title)
 	titleIndex := lineContaining(t, lines, "Second work item")
 	if titleIndex+2 >= len(lines) {
 		t.Fatalf("compact row ended outside rendered view:\n%s", strings.Join(lines, "\n"))
+	}
+	numberColumn := func(line, number string) int {
+		t.Helper()
+		index := strings.Index(line, number)
+		if index < 0 {
+			t.Fatalf("detail line missing %q: %q", number, line)
+		}
+		return ansi.StringWidth(line[:index])
+	}
+	if got, want := numberColumn(lines[titleIndex+1], "#8"),
+		numberColumn(lines[firstTitleIndex+1], "#7"); got != want {
+		t.Fatalf("PR number columns = [%d %d], want equal", want, got)
 	}
 	row := strings.Join(lines[titleIndex:titleIndex+2], "\n")
 	for _, value := range []string{

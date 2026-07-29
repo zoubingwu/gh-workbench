@@ -255,9 +255,16 @@ func (m terminalModel) itemTitleLine(
 		line += style(status, statusColor(status)) + " "
 	}
 	line += title
+	summary := itemSummary(item)
+	if reactions := reactionSummary(item.Reactions); reactions != "" {
+		if summary != "" {
+			summary += "  ·  "
+		}
+		summary += reactions
+	}
 	line = joinItemSummary(
 		line,
-		itemSummary(item),
+		summary,
 		m.width,
 	)
 	return line
@@ -271,15 +278,11 @@ func (m terminalModel) itemDetailLine(
 	if author == "" {
 		author = "ghost"
 	}
-	parts := []string{}
-	if reactions := reactionSummary(item.Reactions); reactions != "" {
-		parts = append(parts, reactions)
-	}
-	parts = append(parts,
+	parts := []string{
 		fmt.Sprintf("#%d", item.Number),
-		"opened by "+author,
-		"updated "+relativeTime(item.UpdatedAt, m.now()),
-	)
+		"opened by " + author,
+		"updated " + relativeTime(item.UpdatedAt, m.now()),
+	}
 	if latest := item.LatestActivity; latest != nil {
 		actor := terminalText(latest.Actor)
 		if actor == "" {
