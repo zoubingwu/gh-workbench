@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS poll_resources (
 	last_changed_at INTEGER,
 	resource_updated_at INTEGER NOT NULL,
 	unchanged_count INTEGER NOT NULL DEFAULT 0,
+	failure_count INTEGER NOT NULL DEFAULT 0,
 	last_error TEXT NOT NULL DEFAULT '',
 	revision INTEGER NOT NULL DEFAULT 0
 );
@@ -132,6 +133,9 @@ CREATE INDEX IF NOT EXISTS poll_resources_due
 		return fmt.Errorf("create sqlite schema: %w", err)
 	}
 	if err := s.migrateWorkItemColumns(ctx); err != nil {
+		return err
+	}
+	if err := s.migratePollResourceColumns(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -304,6 +308,29 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit work item schema migration: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) migratePollResourceColumns(ctx context.Context) error {
+	var columnCount int
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*)
+		FROM pragma_table_info('poll_resources')
+		WHERE name = 'failure_count'`,
+	).Scan(&columnCount); err != nil {
+		return fmt.Errorf("inspect poll resource schema: %w", err)
+	}
+	if columnCount > 0 {
+		return nil
+	}
+	if _, err := s.db.ExecContext(
+		ctx,
+		`ALTER TABLE poll_resources
+		ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0`,
+	); err != nil {
+		return fmt.Errorf("add poll resource failure count: %w", err)
 	}
 	return nil
 }
@@ -1165,6 +1192,7 @@ func (s *Store) ListDueResources(
 			poll_resources.last_changed_at,
 			poll_resources.resource_updated_at,
 			poll_resources.unchanged_count,
+			poll_resources.failure_count,
 			poll_resources.last_error,
 			poll_resources.revision,
 			work_items.node_id,
@@ -1227,6 +1255,7 @@ func (s *Store) SavePollResource(
 			last_changed_at = ?,
 			resource_updated_at = ?,
 			unchanged_count = ?,
+			failure_count = ?,
 			last_error = ?,
 			revision = revision + 1
 		WHERE resource_key = ? AND revision = ?`,
@@ -1238,6 +1267,7 @@ func (s *Store) SavePollResource(
 		nullableTime(resource.LastChangedAt),
 		resource.ResourceUpdatedAt.UnixNano(),
 		resource.UnchangedCount,
+		resource.FailureCount,
 		resource.LastError,
 		resource.Key,
 		resource.Revision,
@@ -1564,6 +1594,7 @@ func (s *Store) loadResources(
 			poll_resources.last_changed_at,
 			poll_resources.resource_updated_at,
 			poll_resources.unchanged_count,
+			poll_resources.failure_count,
 			poll_resources.last_error,
 			poll_resources.revision,
 			work_items.node_id,
@@ -1629,6 +1660,7 @@ func scanPollResource(row scanner) (model.PollResource, error) {
 		&lastChangedAt,
 		&resourceUpdatedAt,
 		&resource.UnchangedCount,
+		&resource.FailureCount,
 		&resource.LastError,
 		&resource.Revision,
 		&nodeID,

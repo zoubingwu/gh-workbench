@@ -1153,7 +1153,7 @@ func TestStaleActivityPollDoesNotOverwriteHotReset(t *testing.T) {
 	}
 }
 
-func TestOpenMigratesWorkItemColumns(t *testing.T) {
+func TestOpenMigratesLegacyColumns(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "legacy.db")
@@ -1283,6 +1283,20 @@ func TestOpenMigratesWorkItemColumns(t *testing.T) {
 	}
 	if etag != "" {
 		t.Fatalf("migrated activity ETag = %q, want empty cache reset", etag)
+	}
+	var failureCountColumn int
+	if err := database.db.QueryRow(
+		`SELECT COUNT(*)
+		FROM pragma_table_info('poll_resources')
+		WHERE name = 'failure_count'`,
+	).Scan(&failureCountColumn); err != nil {
+		t.Fatalf("inspect migrated poll resource schema: %v", err)
+	}
+	if failureCountColumn != 1 {
+		t.Fatalf(
+			"failure_count columns = %d, want 1",
+			failureCountColumn,
+		)
 	}
 }
 

@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -199,6 +200,127 @@ func TestRunnerBatchesActivitiesAndPollsReactions(t *testing.T) {
 		case <-timeout.C:
 			t.Fatal("runner did not publish a reaction snapshot")
 		}
+	}
+}
+
+func TestRunnerReportsTransientErrorAfterThreeConsecutiveFailures(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := store.Open(filepath.Join(t.TempDir(), "workbench.db"))
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("Store.Close() error = %v", err)
+		}
+	})
+
+	now := time.Now().UTC()
+	host := "github.com"
+	if err := database.EnsureAccount(ctx, host, now); err != nil {
+		t.Fatalf("EnsureAccount() error = %v", err)
+	}
+	loadResource := func() model.PollResource {
+		t.Helper()
+		resources, err := database.ListDueResources(
+			ctx,
+			host,
+			time.Now().UTC().Add(24*time.Hour),
+			10,
+		)
+		if err != nil {
+			t.Fatalf("ListDueResources() error = %v", err)
+		}
+		for _, resource := range resources {
+			if resource.Kind == model.ResourceKindWorkItems {
+				return resource
+			}
+		}
+		t.Fatal("work items resource is missing")
+		return model.PollResource{}
+	}
+
+	runner := New(database, &fakeSource{}, host, "octocat", 1, nil)
+	resource := loadResource()
+	pollErr := errors.New("network unavailable")
+	for attempt := 1; attempt <= 3; attempt++ {
+		published, err := runner.savePollOutcome(
+			ctx,
+			resource,
+			OutcomeFailed,
+			pollErr,
+		)
+		if err != nil {
+			t.Fatalf("savePollOutcome() attempt %d error = %v", attempt, err)
+		}
+		wantPublished := attempt == 3
+		if published != wantPublished {
+			t.Fatalf(
+				"savePollOutcome() attempt %d published = %v, want %v",
+				attempt,
+				published,
+				wantPublished,
+			)
+		}
+		resource = loadResource()
+		wantError := ""
+		if attempt == 3 {
+			wantError = pollErr.Error()
+		}
+		if resource.LastError != wantError {
+			t.Fatalf(
+				"attempt %d LastError = %q, want %q",
+				attempt,
+				resource.LastError,
+				wantError,
+			)
+		}
+		if resource.FailureCount != attempt {
+			t.Fatalf(
+				"attempt %d FailureCount = %d, want %d",
+				attempt,
+				resource.FailureCount,
+				attempt,
+			)
+		}
+	}
+
+	published, err := runner.savePollOutcome(
+		ctx,
+		resource,
+		OutcomeUnchanged,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("savePollOutcome() recovery error = %v", err)
+	}
+	if !published {
+		t.Fatal("savePollOutcome() recovery published = false, want true")
+	}
+	resource = loadResource()
+	if resource.LastError != "" {
+		t.Fatalf("recovered LastError = %q, want empty", resource.LastError)
+	}
+	if resource.FailureCount != 0 {
+		t.Fatalf("recovered FailureCount = %d, want 0", resource.FailureCount)
+	}
+
+	published, err = runner.savePollOutcome(
+		ctx,
+		resource,
+		OutcomeFailed,
+		pollErr,
+	)
+	if err != nil {
+		t.Fatalf("savePollOutcome() after recovery error = %v", err)
+	}
+	if published {
+		t.Fatal("savePollOutcome() after recovery published = true, want false")
+	}
+	if resource = loadResource(); resource.LastError != "" {
+		t.Fatalf("LastError after recovery failure = %q, want empty", resource.LastError)
 	}
 }
 

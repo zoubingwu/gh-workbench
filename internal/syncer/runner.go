@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	schedulerTick     = 250 * time.Millisecond
-	activityBatchSize = 50
+	schedulerTick           = 250 * time.Millisecond
+	activityBatchSize       = 50
+	failuresBeforeReporting = 3
 )
 
 type Source interface {
@@ -562,9 +563,11 @@ func (r *Runner) savePollOutcome(
 	pollErr error,
 ) (bool, error) {
 	lastError := resource.LastError
+	errorWasReported := lastError != ""
 	completedAt := time.Now().UTC()
 	var retryable interface{ RetryAt() time.Time }
-	if errors.As(pollErr, &retryable) {
+	reportImmediately := errors.As(pollErr, &retryable)
+	if reportImmediately {
 		r.pause(retryable.RetryAt())
 	}
 	resource.LastPollAt = &completedAt
@@ -574,11 +577,18 @@ func (r *Runner) savePollOutcome(
 		resource.LastSuccessAt = &completedAt
 		resource.LastChangedAt = &completedAt
 		resource.UnchangedCount = 0
+		resource.FailureCount = 0
 	case OutcomeUnchanged:
 		resource.LastSuccessAt = &completedAt
 		resource.UnchangedCount++
+		resource.FailureCount = 0
 	case OutcomeFailed:
-		resource.LastError = pollErr.Error()
+		resource.FailureCount++
+		if errorWasReported ||
+			reportImmediately ||
+			resource.FailureCount >= failuresBeforeReporting {
+			resource.LastError = pollErr.Error()
+		}
 	}
 
 	activityAt := resource.ResourceUpdatedAt
