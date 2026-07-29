@@ -148,10 +148,10 @@ built-in synthetic snapshot:
 pnpm --dir web build
 
 # Browser
-go run ./cmd/gh-workbench --demo
+go run ./cmd/gh-workbench --demo --browser
 
 # Terminal
-go run ./cmd/gh-workbench --demo --ui tui
+go run ./cmd/gh-workbench --demo
 ```
 
 Demo mode runs entirely from memory and leaves GitHub credentials, GitHub APIs,
