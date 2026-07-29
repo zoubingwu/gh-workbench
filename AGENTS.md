@@ -29,8 +29,8 @@ isolated by GitHub host and viewer login.
 9. A bounded worker pool leases due resources and publishes aggregate snapshots
    with ephemeral local-agent activity to browsers over WebSocket or refreshes
    the in-process TUI from SQLite.
-10. In browser mode, the coalesced snapshot publication path advances a Go
-   notification cursor and delivers enabled macOS system notifications.
+10. Browser publications and TUI snapshot refreshes advance a shared Go
+    notification cursor and deliver enabled macOS system notifications.
 
 The scheduler treats every resource as a small state machine. A change heats the
 resource to a ten-second interval; successive unchanged results double the
@@ -56,8 +56,8 @@ remain within the scheduler until the queue becomes idle.
 - `internal/syncer` owns the global search resource, batched activity resources,
   pull-request reaction resources, polling cadence, and bounded concurrency.
 - `internal/server` owns the local HTTP/WebSocket protocol and session checks.
-- `internal/tui` owns terminal state, filtering, keyboard interaction, and
-  snapshot rendering.
+- `internal/tui` owns terminal state, filtering, notification preference
+  interaction, keyboard interaction, and snapshot rendering.
 - `internal/model` contains types shared across backend boundaries.
 - `internal/notification` owns notification change detection and macOS system
   delivery.

@@ -5,29 +5,33 @@ Status: implemented for macOS
 ## Design
 
 GitHub Workbench detects notification-worthy snapshot changes in Go and sends
-informational macOS notifications through `/usr/bin/osascript`. The browser UI
-owns account-scoped preferences, and SQLite persists them across process
-restarts.
+informational macOS notifications through `/usr/bin/osascript`. The browser and
+terminal interfaces expose account-scoped preferences, and SQLite persists
+them across process restarts.
 
-The existing coalesced publication path performs the notification work:
-
-1. Load the current snapshot.
-2. Publish it to WebSocket clients.
-3. Advance the in-memory notification cursor.
-4. Send notifications for new relevant items and newer activity.
+Both UI modes observe authoritative snapshots. Browser publication serializes
+WebSocket delivery with notification observation. The TUI snapshot source
+serializes cache reads, preference writes, and notification observation before
+rendering. The observer advances the in-memory cursor and sends notifications
+for new relevant items and newer activity.
 
 The cursor seeds silently after the first successful sync, advances while
 notifications are disabled, preserves activity timestamps across transient
 search omissions, and ignores activity created by the active viewer.
+Enabling notifications starts delivery with the next qualifying change;
+previously observed activity remains in the cursor history. With “Only my PRs”
+enabled, pull requests authored by other accounts are filtered while relevant
+issues remain eligible.
 
 `internal/notification` owns change detection and delivery. `internal/app`
-composes the sender and observes snapshots from the scheduler publication path.
+composes the sender and observes browser publications or TUI snapshot refreshes.
 WebSocket connection snapshots remain outside notification delivery.
 
 ## Preferences
 
 The browser reads and updates two account-scoped SQLite preferences through a
-same-origin API:
+same-origin API. The TUI reads and updates the same preferences directly with
+the `n` and `m` keys:
 
 - `notificationsEnabled`
 - `onlyMyPullRequests`

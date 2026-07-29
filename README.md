@@ -50,17 +50,18 @@ as the browser work list. It accepts these keys:
 | `j`, `down`, `k`, `up` | Move the selection |
 | `pgdown`, `pgup` | Move by one visible page |
 | `1`, `2`, `3` | Show all items, pull requests, or issues |
-| `m` | Toggle pull requests authored by the active account |
+| `m` | Toggle the account-scoped “Only my PRs” filter |
 | `i` | Toggle inactive items |
+| `n` | Toggle macOS system notifications |
 | `r` | Sync now |
 | `enter`, `o` | Open the selected work item |
 | `q`, `ctrl+c` | Exit |
 
-The browser UI can enable account-scoped macOS system notifications. The Go
-service continues delivering informational notifications while its browser tab
-is closed. The `gh workbench` process must remain running. The “Only my PRs”
-setting also controls which pull request activity can produce a system
-notification.
+The browser and terminal interfaces can enable account-scoped macOS system
+notifications. The Go process delivers informational notifications while it
+remains running; browser-mode delivery continues after its tab closes. The
+“Only my PRs” setting also controls which pull request activity can produce a
+system notification.
 
 Pull request rows show local Codex and Claude Code activity when a running
 session's Git checkout matches the pull request head repository, branch, or

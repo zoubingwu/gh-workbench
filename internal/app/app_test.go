@@ -3,9 +3,15 @@ package app
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/zoubingwu/gh-workbench/internal/model"
+	"github.com/zoubingwu/gh-workbench/internal/store"
+	"github.com/zoubingwu/gh-workbench/internal/syncer"
 )
 
 func TestReadKeyringTokenUsesActiveSecureStorage(t *testing.T) {
@@ -88,5 +94,85 @@ func TestValidateTUIStreamsRejectsNonTerminalStreams(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "interactive terminal") {
 		t.Fatalf("validateTUIStreams() error = %q", err)
+	}
+}
+
+func TestTerminalSnapshotSourceObservesAndUpdatesNotifications(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	database, err := store.Open(filepath.Join(t.TempDir(), "workbench.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+	if err := database.EnsureAccount(ctx, "github.com", time.Now().UTC()); err != nil {
+		t.Fatalf("EnsureAccount() error = %v", err)
+	}
+
+	runner := syncer.New(database, nil, "github.com", "octocat", 1, nil)
+	var (
+		observed model.Snapshot
+		updates  int
+	)
+	source := &terminalSnapshotSource{
+		database:               database,
+		runner:                 runner,
+		host:                   "github.com",
+		viewer:                 "octocat",
+		notificationsSupported: true,
+		observeNotifications: func(_ context.Context, snapshot model.Snapshot) {
+			observed = snapshot
+		},
+		signalSnapshotUpdate: func() {
+			updates++
+		},
+	}
+
+	snapshot, err := source.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if !snapshot.Notifications.Supported {
+		t.Fatal("Snapshot().Notifications.Supported = false, want true")
+	}
+	if observed.Notifications != snapshot.Notifications {
+		t.Fatalf(
+			"observed notifications = %#v, want %#v",
+			observed.Notifications,
+			snapshot.Notifications,
+		)
+	}
+
+	enabled := true
+	if err := source.UpdateNotificationPreferences(
+		ctx,
+		model.NotificationPreferencesUpdate{Enabled: &enabled},
+	); err != nil {
+		t.Fatalf("UpdateNotificationPreferences() error = %v", err)
+	}
+	onlyMine := false
+	if err := source.UpdateNotificationPreferences(
+		ctx,
+		model.NotificationPreferencesUpdate{OnlyMyPullRequests: &onlyMine},
+	); err != nil {
+		t.Fatalf("UpdateNotificationPreferences(Only my PRs) error = %v", err)
+	}
+	preferences, err := database.NotificationPreferences(ctx)
+	if err != nil {
+		t.Fatalf("NotificationPreferences() error = %v", err)
+	}
+	if !preferences.Enabled || preferences.OnlyMyPullRequests {
+		t.Fatalf(
+			"persisted notification preferences = %#v, want enabled and all PRs",
+			preferences,
+		)
+	}
+	if updates != 2 {
+		t.Fatalf("snapshot update count = %d, want 2", updates)
 	}
 }

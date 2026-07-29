@@ -36,7 +36,7 @@ func (m terminalModel) View() tea.View {
 		lines = append(lines, style("! "+message, ansiRed))
 	}
 
-	lines = append(lines, m.filterLine())
+	lines = append(lines, m.controlLines()...)
 	lines = append(lines, style(strings.Repeat("─", max(m.width, 1)), ansiDim))
 
 	tail := make([]string, 0, 4)
@@ -48,7 +48,7 @@ func (m terminalModel) View() tea.View {
 		)
 	}
 	shortcuts := style(
-		"↑/k ↓/j move  1–3 filter  m mine  i inactive  r sync  enter/o open  q quit",
+		"↑/k ↓/j move  1–3 filter  m mine  i inactive  n notifications  r sync  enter/o open  q quit",
 		ansiDim,
 	)
 	footer := style("GitHub Workbench", ansiBold, ansiCyan) +
@@ -125,10 +125,27 @@ func (m terminalModel) filterLine() string {
 		),
 		m.filterLabel(filterIssues, "3 Issues", counts.issues),
 	}
-	return strings.Join(filters, "  ") +
-		"  │  " +
+	return strings.Join(filters, "  ")
+}
+
+func (m terminalModel) controlLines() []string {
+	filterLine := m.filterLine()
+	optionLine := m.notificationCheckbox() + "  " +
 		checkbox(m.onlyMine) + " Only my PRs (m)  " +
 		checkbox(m.showInactive) + " Show inactive (i)"
+	combined := filterLine + "  │  " + optionLine
+	if ansi.StringWidth(combined) <= m.width {
+		return []string{combined}
+	}
+	return []string{filterLine, optionLine}
+}
+
+func (m terminalModel) notificationCheckbox() string {
+	if !m.loaded || !m.snapshot.Notifications.Supported {
+		return "[ ] Notifications unavailable"
+	}
+	return checkbox(m.snapshot.Notifications.Enabled) +
+		" System notifications (n)"
 }
 
 func (m terminalModel) filterLabel(
@@ -226,7 +243,7 @@ func itemRangeLineCount(
 }
 
 func (m terminalModel) listHeight() int {
-	fixedLines := 5
+	fixedLines := 4 + len(m.controlLines())
 	if m.errorLine() != "" {
 		fixedLines++
 	}

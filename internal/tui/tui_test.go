@@ -28,6 +28,9 @@ func TestModelUsesBrowserViewDefaults(t *testing.T) {
 			Viewer:          "alice",
 			RepositoryCount: 3,
 			GeneratedAt:     now,
+			Notifications: model.NotificationPreferences{
+				OnlyMyPullRequests: true,
+			},
 			Items: []model.WorkItem{
 				workItem("acme/api", 3, model.ItemKindPullRequest, "alice", now),
 				workItem("acme/docs", 8, model.ItemKindIssue, "bob", now),
@@ -87,6 +90,9 @@ func TestModelFiltersAndTogglesItems(t *testing.T) {
 		snapshot: model.Snapshot{
 			Viewer:      "alice",
 			GeneratedAt: now,
+			Notifications: model.NotificationPreferences{
+				OnlyMyPullRequests: true,
+			},
 			Items: []model.WorkItem{
 				workItem("acme/api", 3, model.ItemKindPullRequest, "alice", now),
 				workItem("acme/api", 2, model.ItemKindPullRequest, "bob", now),
@@ -120,6 +126,148 @@ func TestModelFiltersAndTogglesItems(t *testing.T) {
 		if item.Kind != model.ItemKindPullRequest {
 			t.Fatalf("item kind = %q, want pull_request", item.Kind)
 		}
+	}
+}
+
+func TestModelTogglesSystemNotifications(t *testing.T) {
+	t.Parallel()
+
+	var savedEnabled bool
+	current := newModel(context.Background(), Options{
+		UpdateNotificationPreferences: func(
+			_ context.Context,
+			update model.NotificationPreferencesUpdate,
+		) error {
+			savedEnabled = *update.Enabled
+			return nil
+		},
+	}, time.Now)
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Notifications: model.NotificationPreferences{
+				Supported: true,
+			},
+		},
+	})
+
+	updated, command := current.Update(keyPress("n"))
+	current = updated.(terminalModel)
+	if command == nil {
+		t.Fatal("notification update command = nil")
+	}
+	if !current.savingNotificationPreferences {
+		t.Fatal("savingNotificationPreferences = false, want true")
+	}
+
+	current = updateModel(t, current, command())
+	if !savedEnabled {
+		t.Fatal("saved notification preference = false, want true")
+	}
+	if current.savingNotificationPreferences {
+		t.Fatal("savingNotificationPreferences = true, want false")
+	}
+	if !current.snapshot.Notifications.Enabled {
+		t.Fatal("snapshot notification preference = false, want true")
+	}
+	if view := ansi.Strip(current.View().Content); !strings.Contains(
+		view,
+		"[x] System notifications (n)",
+	) {
+		t.Fatalf("View() missing enabled notification checkbox:\n%s", view)
+	}
+}
+
+func TestModelKeepsSystemNotificationStateWhenSaveFails(t *testing.T) {
+	t.Parallel()
+
+	current := newModel(context.Background(), Options{
+		UpdateNotificationPreferences: func(
+			context.Context,
+			model.NotificationPreferencesUpdate,
+		) error {
+			return errors.New("database is busy")
+		},
+	}, time.Now)
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Notifications: model.NotificationPreferences{
+				Supported: true,
+			},
+		},
+	})
+
+	updated, command := current.Update(keyPress("n"))
+	current = updated.(terminalModel)
+	if command == nil {
+		t.Fatal("notification update command = nil")
+	}
+	current = updateModel(t, current, command())
+
+	if current.snapshot.Notifications.Enabled {
+		t.Fatal("snapshot notification preference = true, want false")
+	}
+	if current.savingNotificationPreferences {
+		t.Fatal("savingNotificationPreferences = true, want false")
+	}
+	if !strings.Contains(current.action, "database is busy") {
+		t.Fatalf("action = %q, want save error", current.action)
+	}
+}
+
+func TestModelUsesAndUpdatesPersistedOnlyMyPullRequests(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	var savedOnlyMine bool
+	current := newModel(context.Background(), Options{
+		UpdateNotificationPreferences: func(
+			_ context.Context,
+			update model.NotificationPreferencesUpdate,
+		) error {
+			savedOnlyMine = *update.OnlyMyPullRequests
+			return nil
+		},
+	}, func() time.Time {
+		return now
+	})
+	current = updateModel(t, current, snapshotLoadedMsg{
+		snapshot: model.Snapshot{
+			Viewer:      "alice",
+			GeneratedAt: now,
+			Notifications: model.NotificationPreferences{
+				Supported: true,
+			},
+			Items: []model.WorkItem{
+				workItem("acme/api", 1, model.ItemKindPullRequest, "alice", now),
+				workItem("acme/api", 2, model.ItemKindPullRequest, "bob", now),
+			},
+		},
+	})
+	if current.onlyMine {
+		t.Fatal("onlyMine = true, want persisted false")
+	}
+
+	updated, command := current.Update(keyPress("m"))
+	current = updated.(terminalModel)
+	if command == nil {
+		t.Fatal("Only my PRs update command = nil")
+	}
+	current = updateModel(t, current, command())
+
+	if !savedOnlyMine {
+		t.Fatal("saved Only my PRs preference = false, want true")
+	}
+	if !current.onlyMine {
+		t.Fatal("onlyMine = false, want true")
+	}
+	if got := len(current.visibleItems()); got != 1 {
+		t.Fatalf("visible items = %d, want 1", got)
+	}
+	if view := ansi.Strip(current.View().Content); !strings.Contains(
+		view,
+		"[x] Only my PRs (m)",
+	) {
+		t.Fatalf("View() missing persisted Only my PRs checkbox:\n%s", view)
 	}
 }
 

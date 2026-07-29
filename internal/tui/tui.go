@@ -19,9 +19,13 @@ type SnapshotSource interface {
 }
 
 type Options struct {
-	Source  SnapshotSource
-	Updates <-chan struct{}
-	Trigger func()
+	Source                        SnapshotSource
+	Updates                       <-chan struct{}
+	Trigger                       func()
+	UpdateNotificationPreferences func(
+		context.Context,
+		model.NotificationPreferencesUpdate,
+	) error
 	OpenURL func(string) error
 	Input   io.Reader
 	Output  io.Writer
@@ -59,23 +63,28 @@ const (
 type terminalModel struct {
 	ctx context.Context
 
-	source  SnapshotSource
-	updates <-chan struct{}
-	trigger func()
+	source                        SnapshotSource
+	updates                       <-chan struct{}
+	trigger                       func()
+	updateNotificationPreferences func(
+		context.Context,
+		model.NotificationPreferencesUpdate,
+	) error
 	openURL func(string) error
 	now     func() time.Time
 
-	snapshot     model.Snapshot
-	loaded       bool
-	loadError    error
-	action       string
-	filter       itemFilter
-	onlyMine     bool
-	showInactive bool
-	cursor       int
-	selectedKey  string
-	width        int
-	height       int
+	snapshot                      model.Snapshot
+	loaded                        bool
+	loadError                     error
+	action                        string
+	filter                        itemFilter
+	onlyMine                      bool
+	showInactive                  bool
+	savingNotificationPreferences bool
+	cursor                        int
+	selectedKey                   string
+	width                         int
+	height                        int
 }
 
 type snapshotLoadedMsg struct {
@@ -93,22 +102,28 @@ type openResultMsg struct {
 	err        error
 }
 
+type notificationPreferencesUpdatedMsg struct {
+	update model.NotificationPreferencesUpdate
+	err    error
+}
+
 func newModel(
 	ctx context.Context,
 	options Options,
 	now func() time.Time,
 ) terminalModel {
 	return terminalModel{
-		ctx:      ctx,
-		source:   options.Source,
-		updates:  options.Updates,
-		trigger:  options.Trigger,
-		openURL:  options.OpenURL,
-		now:      now,
-		filter:   filterAll,
-		onlyMine: true,
-		width:    100,
-		height:   30,
+		ctx:                           ctx,
+		source:                        options.Source,
+		updates:                       options.Updates,
+		trigger:                       options.Trigger,
+		updateNotificationPreferences: options.UpdateNotificationPreferences,
+		openURL:                       options.OpenURL,
+		now:                           now,
+		filter:                        filterAll,
+		onlyMine:                      true,
+		width:                         100,
+		height:                        30,
 	}
 }
 
@@ -129,6 +144,7 @@ func (m terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.waitForUpdate()
 		}
 		m.snapshot = message.snapshot
+		m.onlyMine = message.snapshot.Notifications.OnlyMyPullRequests
 		m.loaded = true
 		m.loadError = nil
 		m.reconcileSelection()
@@ -146,6 +162,29 @@ func (m terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				message.repository,
 				message.number,
 			)
+		}
+	case notificationPreferencesUpdatedMsg:
+		m.savingNotificationPreferences = false
+		if message.err != nil {
+			m.action = "Notification settings update failed: " +
+				message.err.Error()
+			return m, nil
+		}
+		if message.update.Enabled != nil {
+			enabled := *message.update.Enabled
+			m.snapshot.Notifications.Enabled = enabled
+			if enabled {
+				m.action = "System notifications enabled"
+			} else {
+				m.action = "System notifications disabled"
+			}
+		}
+		if message.update.OnlyMyPullRequests != nil {
+			onlyMine := *message.update.OnlyMyPullRequests
+			m.snapshot.Notifications.OnlyMyPullRequests = onlyMine
+			m.onlyMine = onlyMine
+			m.action = "Only my PRs preference updated"
+			m.reconcileSelection()
 		}
 	}
 	return m, nil
@@ -173,11 +212,39 @@ func (m terminalModel) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.filter = filterIssues
 		m.reconcileSelection()
 	case "m":
-		m.onlyMine = !m.onlyMine
-		m.reconcileSelection()
+		onlyMine := !m.onlyMine
+		if m.updateNotificationPreferences == nil {
+			m.onlyMine = onlyMine
+			m.reconcileSelection()
+			return m, nil
+		}
+		if m.savingNotificationPreferences {
+			return m, nil
+		}
+		update := model.NotificationPreferencesUpdate{
+			OnlyMyPullRequests: &onlyMine,
+		}
+		m.savingNotificationPreferences = true
+		m.action = "Saving Only my PRs preference"
+		return m, m.saveNotificationPreferences(update)
 	case "i":
 		m.showInactive = !m.showInactive
 		m.reconcileSelection()
+	case "n":
+		if !m.loaded ||
+			!m.snapshot.Notifications.Supported ||
+			m.updateNotificationPreferences == nil {
+			m.action = "System notifications are unavailable"
+			return m, nil
+		}
+		if m.savingNotificationPreferences {
+			return m, nil
+		}
+		enabled := !m.snapshot.Notifications.Enabled
+		update := model.NotificationPreferencesUpdate{Enabled: &enabled}
+		m.savingNotificationPreferences = true
+		m.action = "Saving system notification settings"
+		return m, m.saveNotificationPreferences(update)
 	case "r":
 		if m.trigger != nil {
 			m.trigger()
@@ -205,6 +272,20 @@ func (m terminalModel) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m terminalModel) saveNotificationPreferences(
+	update model.NotificationPreferencesUpdate,
+) tea.Cmd {
+	return func() tea.Msg {
+		return notificationPreferencesUpdatedMsg{
+			update: update,
+			err: m.updateNotificationPreferences(
+				m.ctx,
+				update,
+			),
+		}
+	}
 }
 
 func (m terminalModel) loadSnapshot() tea.Cmd {
