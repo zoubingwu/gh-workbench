@@ -595,6 +595,13 @@ func TestStorePersistsLatestActivityAcrossDiscoveryRefresh(t *testing.T) {
 			activity,
 		)
 	}
+	if got.LatestCommit == nil || *got.LatestCommit != *commit {
+		t.Fatalf(
+			"Snapshot().Items[0].LatestCommit = %#v, want %#v",
+			got.LatestCommit,
+			commit,
+		)
+	}
 	resources, err := database.loadResources(ctx, host)
 	if err != nil {
 		t.Fatalf("loadResources() after refresh error = %v", err)

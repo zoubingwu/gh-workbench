@@ -1332,7 +1332,8 @@ func (s *Store) loadItems(
 			additions,
 			deletions,
 			labels_json,
-			latest_activity_json
+			latest_activity_json,
+			latest_commit_json
 		FROM work_items
 		WHERE (repository = ? OR repository GLOB ?)
 			AND missing_polls <= ?
@@ -1353,6 +1354,7 @@ func (s *Store) loadItems(
 			updatedAt    int64
 			labelsJSON   string
 			activityJSON sql.NullString
+			commitJSON   sql.NullString
 		)
 		if err := rows.Scan(
 			&item.RepositoryKey,
@@ -1373,6 +1375,7 @@ func (s *Store) loadItems(
 			&item.Deletions,
 			&labelsJSON,
 			&activityJSON,
+			&commitJSON,
 		); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan snapshot work item: %w", err)
@@ -1396,6 +1399,16 @@ func (s *Store) loadItems(
 			rows.Close()
 			return nil, fmt.Errorf(
 				"decode snapshot activity for %s#%d: %w",
+				item.RepositoryKey,
+				item.Number,
+				err,
+			)
+		}
+		item.LatestCommit, err = decodeActivity(commitJSON)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf(
+				"decode snapshot commit for %s#%d: %w",
 				item.RepositoryKey,
 				item.Number,
 				err,
