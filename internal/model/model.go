@@ -187,6 +187,7 @@ type PollResource struct {
 	LastChangedAt       *time.Time
 	ResourceUpdatedAt   time.Time
 	UnchangedCount      int
+	FailureCount        int
 	LastError           string
 	NodeID              string
 	ItemKind            ItemKind
