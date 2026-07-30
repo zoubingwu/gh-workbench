@@ -6,6 +6,7 @@
 *.db-wal
 coverage/
 /dist/
+/.tools/
 node_modules/
 web/node_modules/
 /internal/webui/dist/

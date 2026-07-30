@@ -737,7 +737,9 @@ func TestRunRestoresAlternateScreenOnContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	input, inputWriter := io.Pipe()
-	defer inputWriter.Close()
+	defer func() {
+		_ = inputWriter.Close()
+	}()
 	output := &cancelOnAltScreenWriter{
 		cancel: cancel,
 	}

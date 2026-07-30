@@ -58,13 +58,13 @@ func TestCodexSourceTracksLifecycleRecords(t *testing.T) {
 		"\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-1\"," +
 		"\"last_agent_message\":\"" + strings.Repeat("x", maxLifecycleLine) + "\"}}\n"
 	if _, err := file.WriteString(terminal); err != nil {
-		file.Close()
+		_ = file.Close()
 		t.Fatalf("append rollout: %v", err)
 	}
 	nested := "{\"type\":\"response_item\",\"payload\":{\"type\":\"tool_output\",\"content\":" +
 		"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}}}\n"
 	if _, err := file.WriteString(nested); err != nil {
-		file.Close()
+		_ = file.Close()
 		t.Fatalf("append nested fixture: %v", err)
 	}
 	if err := file.Close(); err != nil {
@@ -166,7 +166,9 @@ func createCodexStateDB(t *testing.T, root, rollout, cwd string) {
 	if err != nil {
 		t.Fatalf("open fixture database: %v", err)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 	if _, err := database.Exec(`
 		CREATE TABLE threads (
 			id TEXT PRIMARY KEY,

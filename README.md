@@ -129,10 +129,12 @@ Requirements:
 - Go 1.25 or newer
 - Node.js 24 or newer
 - pnpm 11 or newer
+- curl, used by `make lint` to install golangci-lint v2.12.2 locally
 - GitHub CLI authenticated with `gh auth login`
 
 ```sh
 make install
+make lint
 make check
 make dev
 ```

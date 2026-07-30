@@ -143,7 +143,9 @@ func (c *Client) FetchViewer(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("fetch viewer: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return "", responseError(response)
 	}
@@ -428,7 +430,9 @@ func (c *Client) fetchSearchPage(
 	if err != nil {
 		return graphQLSearchResponse{}, fmt.Errorf("send GitHub search request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return graphQLSearchResponse{}, responseError(response)
 	}
@@ -691,7 +695,9 @@ func (c *Client) fetchActivityBatch(
 	if err != nil {
 		return nil, fmt.Errorf("send GitHub activity request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, responseError(response)
 	}
