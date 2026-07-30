@@ -24,6 +24,7 @@ $(GOLANGCI_LINT):
 		sh -s -- -b $(dir $@) $(GOLANGCI_LINT_VERSION)
 
 lint: $(GOLANGCI_LINT)
+	pnpm --dir web build
 	$(GOLANGCI_LINT) run ./...
 
 test:
