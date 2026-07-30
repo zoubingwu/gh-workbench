@@ -11,13 +11,19 @@ import (
 	"time"
 
 	"github.com/zoubingwu/gh-workbench/internal/model"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const (
 	initialInterval          = 10 * time.Second
 	missingPollsBeforeDelete = 3
 )
+
+var busyRetryDelays = [...]time.Duration{
+	100 * time.Millisecond,
+	250 * time.Millisecond,
+}
 
 type Store struct {
 	db *sql.DB
@@ -31,11 +37,53 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	database := &Store{db: db}
-	if err := database.initialize(context.Background()); err != nil {
+	ctx := context.Background()
+	if err := RetryBusy(ctx, func() error {
+		return database.initialize(ctx)
+	}); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return database, nil
+}
+
+// IsBusy reports whether err contains a transient SQLite lock result.
+func IsBusy(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	return isBusyCode(sqliteErr.Code())
+}
+
+func isBusyCode(code int) bool {
+	switch code & 0xff {
+	case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
+		return true
+	default:
+		return false
+	}
+}
+
+// RetryBusy retries transient SQLite lock errors with bounded backoff.
+func RetryBusy(ctx context.Context, operation func() error) error {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := operation()
+		if err == nil || !IsBusy(err) || attempt == len(busyRetryDelays) {
+			return err
+		}
+
+		timer := time.NewTimer(busyRetryDelays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *Store) Close() error {
@@ -223,13 +271,13 @@ func (s *Store) migrateWorkItemColumns(ctx context.Context) error {
 			&defaultSQL,
 			&primaryKey,
 		); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return fmt.Errorf("scan work item schema: %w", err)
 		}
 		columns[name] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return fmt.Errorf("iterate work item schema: %w", err)
 	}
 	if err := rows.Close(); err != nil {
@@ -749,7 +797,9 @@ func loadItemRecords(
 	if err != nil {
 		return nil, fmt.Errorf("load existing work items: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	records := make(map[itemIdentity]itemRecord)
 	for rows.Next() {
@@ -1146,7 +1196,9 @@ func loadReactions(
 	if err != nil {
 		return nil, fmt.Errorf("load reactions for item %d: %w", number, err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	reactions := make([]model.Reaction, 0)
 	for rows.Next() {
@@ -1224,7 +1276,9 @@ func (s *Store) ListDueResources(
 	if err != nil {
 		return nil, fmt.Errorf("list due poll resources: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	resources := make([]model.PollResource, 0, limit)
 	for rows.Next() {
@@ -1455,13 +1509,13 @@ func (s *Store) loadItems(
 			&activityJSON,
 			&commitJSON,
 		); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("scan snapshot work item: %w", err)
 		}
 		item.CreatedAt = time.Unix(0, createdAt).UTC()
 		item.UpdatedAt = time.Unix(0, updatedAt).UTC()
 		if err := json.Unmarshal([]byte(labelsJSON), &item.Labels); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf(
 				"decode snapshot work item labels for %s#%d: %w",
 				item.RepositoryKey,
@@ -1474,7 +1528,7 @@ func (s *Store) loadItems(
 		}
 		item.LatestActivity, err = decodeActivity(activityJSON)
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf(
 				"decode snapshot activity for %s#%d: %w",
 				item.RepositoryKey,
@@ -1484,7 +1538,7 @@ func (s *Store) loadItems(
 		}
 		item.LatestCommit, err = decodeActivity(commitJSON)
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf(
 				"decode snapshot commit for %s#%d: %w",
 				item.RepositoryKey,
@@ -1494,7 +1548,7 @@ func (s *Store) loadItems(
 		}
 		repository, err := model.ParseRepositoryKey(item.RepositoryKey)
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("decode snapshot repository: %w", err)
 		}
 		item.Repository = repository.FullName()
@@ -1502,7 +1556,7 @@ func (s *Store) loadItems(
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return nil, fmt.Errorf("iterate snapshot work items: %w", err)
 	}
 	if err := rows.Close(); err != nil {
@@ -1547,7 +1601,9 @@ func (s *Store) loadAllReactions(
 	if err != nil {
 		return nil, fmt.Errorf("load snapshot reactions: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	reactions := make(map[itemIdentity][]model.Reaction)
 	for rows.Next() {
@@ -1613,7 +1669,9 @@ func (s *Store) loadResources(
 	if err != nil {
 		return nil, fmt.Errorf("load snapshot poll resources: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	resources := make(map[string]model.PollResource)
 	for rows.Next() {

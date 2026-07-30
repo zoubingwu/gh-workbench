@@ -28,7 +28,7 @@ func runDemo(ctx context.Context, options Options) error {
 	if !options.Browser {
 		launcher := browser.New("", io.Discard, io.Discard)
 		return tui.Run(ctx, tui.Options{
-			Source:                        demoTerminalSource{backend: backend},
+			Source:                        backend,
 			Trigger:                       backend.Trigger,
 			UpdateNotificationPreferences: backend.UpdateNotificationPreferences,
 			OpenURL:                       launcher.Browse,
@@ -40,10 +40,6 @@ func runDemo(ctx context.Context, options Options) error {
 	localServer, err := server.New(
 		backend,
 		backend,
-		demoHost,
-		demoViewer,
-		true,
-		nil,
 		nil,
 	)
 	if err != nil {
@@ -67,25 +63,13 @@ func newDemoBackend() *demoBackend {
 	}
 }
 
-type demoTerminalSource struct {
-	backend *demoBackend
-}
-
-func (s demoTerminalSource) Snapshot(
-	ctx context.Context,
-) (model.Snapshot, error) {
-	return s.backend.Snapshot(
-		ctx,
-		demoHost,
-		false,
-		time.Now().UTC(),
-	)
-}
-
 func (b *demoBackend) Snapshot(
 	_ context.Context,
-	_ string,
-	_ bool,
+) (model.Snapshot, error) {
+	return b.snapshot(time.Now().UTC())
+}
+
+func (b *demoBackend) snapshot(
 	now time.Time,
 ) (model.Snapshot, error) {
 	b.mu.RLock()
@@ -298,10 +282,6 @@ func (b *demoBackend) UpdateNotificationPreferences(
 }
 
 func (*demoBackend) Trigger() {}
-
-func (*demoBackend) Running() bool {
-	return false
-}
 
 func newDemoItem(
 	now time.Time,

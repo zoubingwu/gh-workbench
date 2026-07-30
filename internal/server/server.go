@@ -29,13 +29,8 @@ const (
 	maxJSONBodyBytes    = 1024
 )
 
-type SnapshotStore interface {
-	Snapshot(
-		context.Context,
-		string,
-		bool,
-		time.Time,
-	) (model.Snapshot, error)
+type SnapshotSource interface {
+	Snapshot(context.Context) (model.Snapshot, error)
 	UpdateNotificationPreferences(
 		context.Context,
 		model.NotificationPreferencesUpdate,
@@ -44,37 +39,24 @@ type SnapshotStore interface {
 
 type SyncController interface {
 	Trigger()
-	Running() bool
-}
-
-type ItemDecorator interface {
-	Decorate([]model.WorkItem)
 }
 
 type Server struct {
-	store                  SnapshotStore
-	controller             SyncController
-	decorator              ItemDecorator
-	host                   string
-	viewer                 string
-	notificationsSupported bool
-	observeSnapshot        func(context.Context, model.Snapshot)
-	session                string
-	cookieName             string
-	ui                     fs.FS
-	hub                    *hub
-	handler                http.Handler
+	source          SnapshotSource
+	controller      SyncController
+	observeSnapshot func(context.Context, model.Snapshot)
+	session         string
+	cookieName      string
+	ui              fs.FS
+	hub             *hub
+	handler         http.Handler
 
 	publicationMu sync.Mutex
 }
 
 func New(
-	store SnapshotStore,
+	source SnapshotSource,
 	controller SyncController,
-	host string,
-	viewer string,
-	notificationsSupported bool,
-	decorator ItemDecorator,
 	observeSnapshot func(context.Context, model.Snapshot),
 ) (*Server, error) {
 	session, err := newSession()
@@ -87,17 +69,13 @@ func New(
 	}
 
 	server := &Server{
-		store:                  store,
-		controller:             controller,
-		decorator:              decorator,
-		host:                   host,
-		viewer:                 viewer,
-		notificationsSupported: notificationsSupported,
-		observeSnapshot:        observeSnapshot,
-		session:                session,
-		cookieName:             sessionCookiePrefix + session[:16],
-		ui:                     ui,
-		hub:                    newHub(),
+		source:          source,
+		controller:      controller,
+		observeSnapshot: observeSnapshot,
+		session:         session,
+		cookieName:      sessionCookiePrefix + session[:16],
+		ui:              ui,
+		hub:             newHub(),
 	}
 	server.handler = server.routes()
 	return server, nil
@@ -130,7 +108,7 @@ func (s *Server) PublishSnapshot(
 func (s *Server) publishSnapshot(
 	ctx context.Context,
 ) (model.Snapshot, error) {
-	snapshot, err := s.snapshot(ctx)
+	snapshot, err := s.source.Snapshot(ctx)
 	if err != nil {
 		return model.Snapshot{}, err
 	}
@@ -175,7 +153,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "session required")
 		return
 	}
-	snapshot, err := s.snapshot(r.Context())
+	snapshot, err := s.source.Snapshot(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load workbench snapshot")
 		return
@@ -220,7 +198,7 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.publicationMu.Lock()
-	if err := s.store.UpdateNotificationPreferences(
+	if err := s.source.UpdateNotificationPreferences(
 		r.Context(),
 		update,
 	); err != nil {
@@ -251,7 +229,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer connection.CloseNow()
+	defer func() {
+		_ = connection.CloseNow()
+	}()
 
 	connection.SetReadLimit(1024)
 	clientContext := connection.CloseRead(context.Background())
@@ -319,28 +299,6 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeContent(w, r, path, info.ModTime(), bytes.NewReader(content))
-}
-
-func (s *Server) snapshot(ctx context.Context) (model.Snapshot, error) {
-	snapshot, err := s.store.Snapshot(
-		ctx,
-		s.host,
-		s.controller.Running(),
-		time.Now().UTC(),
-	)
-	if err != nil {
-		return model.Snapshot{}, err
-	}
-	snapshot.Host = s.host
-	snapshot.Viewer = s.viewer
-	snapshot.Notifications.Supported = s.notificationsSupported
-	if snapshot.Items == nil {
-		snapshot.Items = make([]model.WorkItem, 0)
-	}
-	if s.decorator != nil {
-		s.decorator.Decorate(snapshot.Items)
-	}
-	return snapshot, nil
 }
 
 func (s *Server) authenticated(r *http.Request) bool {

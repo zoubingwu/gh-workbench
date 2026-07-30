@@ -87,12 +87,19 @@ func New(
 	viewer string,
 	workers int,
 	onUpdate func(),
+	retryStore func(context.Context, func() error) error,
 ) *Runner {
 	if workers < 1 {
 		workers = 1
 	}
 	if onUpdate == nil {
 		onUpdate = func() {}
+	}
+	if retryStore != nil {
+		store = &retryingStorage{
+			store: store,
+			retry: retryStore,
+		}
 	}
 	return &Runner{
 		store:    store,

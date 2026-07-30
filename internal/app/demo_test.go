@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -13,12 +12,7 @@ func TestDemoBackendSnapshotCoversScreenshotStates(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
-	snapshot, err := newDemoBackend().Snapshot(
-		context.Background(),
-		demoHost,
-		false,
-		now,
-	)
+	snapshot, err := newDemoBackend().snapshot(now)
 	if err != nil {
 		t.Fatalf("Snapshot() error = %v", err)
 	}

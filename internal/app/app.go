@@ -107,11 +107,16 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 	if err := os.Chmod(databasePath, 0o600); err != nil {
 		return fmt.Errorf("protect database file: %w", err)
 	}
-	if err := database.EnsureAccount(ctx, host, time.Now().UTC()); err != nil {
+	accountNow := time.Now().UTC()
+	if err := store.RetryBusy(ctx, func() error {
+		return database.EnsureAccount(ctx, host, accountNow)
+	}); err != nil {
 		return err
 	}
 
@@ -130,6 +135,7 @@ func Run(ctx context.Context, options Options) error {
 		viewer,
 		workerCount,
 		notifySnapshot,
+		store.RetryBusy,
 	)
 	var notificationWarning sync.Once
 	reportNotificationError := func(err error) {
@@ -157,26 +163,34 @@ func Run(ctx context.Context, options Options) error {
 		ctx,
 		shutdownPeriod,
 	)
-	baselineItems, err := database.NotificationBaselineItems(
-		baselineContext,
-		host,
-	)
+	var baselineItems []model.WorkItem
+	err = store.RetryBusy(baselineContext, func() error {
+		var loadErr error
+		baselineItems, loadErr = database.NotificationBaselineItems(
+			baselineContext,
+			host,
+		)
+		return loadErr
+	})
 	baselineCancel()
 	if err != nil {
 		return fmt.Errorf("load notification baseline: %w", err)
 	}
 	notificationManager.Seed(baselineItems)
 
+	workbenchSource := &snapshotSource{
+		database:               database,
+		runner:                 runner,
+		decorator:              agentObserver,
+		host:                   host,
+		viewer:                 viewer,
+		notificationsSupported: notification.Supported,
+	}
 	if !options.Browser {
 		source := &terminalSnapshotSource{
-			database:               database,
-			runner:                 runner,
-			decorator:              agentObserver,
-			host:                   host,
-			viewer:                 viewer,
-			notificationsSupported: notification.Supported,
-			observeNotifications:   observeNotifications,
-			signalSnapshotUpdate:   notifySnapshot,
+			source:               workbenchSource,
+			observeNotifications: observeNotifications,
+			signalSnapshotUpdate: notifySnapshot,
 		}
 		return runTerminalUI(
 			ctx,
@@ -200,12 +214,8 @@ func Run(ctx context.Context, options Options) error {
 	}
 
 	localServer, err := server.New(
-		database,
+		workbenchSource,
 		runner,
-		host,
-		viewer,
-		notification.Supported,
-		agentObserver,
 		observeNotifications,
 	)
 	if err != nil {
@@ -262,7 +272,9 @@ func serveLocal(
 	if err != nil {
 		return fmt.Errorf("listen on loopback: %w", err)
 	}
-	defer listener.Close()
+	defer func() {
+		_ = listener.Close()
+	}()
 
 	httpServer := &http.Server{
 		Handler:           localServer.Handler(),
@@ -344,16 +356,79 @@ func serveLocal(
 	return runErr
 }
 
-type terminalSnapshotSource struct {
-	mu                     sync.Mutex
-	database               *store.Store
-	runner                 *syncer.Runner
-	decorator              server.ItemDecorator
+type snapshotStore interface {
+	Snapshot(
+		context.Context,
+		string,
+		bool,
+		time.Time,
+	) (model.Snapshot, error)
+	UpdateNotificationPreferences(
+		context.Context,
+		model.NotificationPreferencesUpdate,
+	) error
+}
+
+type syncState interface {
+	Running() bool
+}
+
+type itemDecorator interface {
+	Decorate([]model.WorkItem)
+}
+
+type snapshotSource struct {
+	database               snapshotStore
+	runner                 syncState
+	decorator              itemDecorator
 	host                   string
 	viewer                 string
 	notificationsSupported bool
-	observeNotifications   func(context.Context, model.Snapshot)
-	signalSnapshotUpdate   func()
+}
+
+func (s *snapshotSource) Snapshot(
+	ctx context.Context,
+) (model.Snapshot, error) {
+	var snapshot model.Snapshot
+	err := store.RetryBusy(ctx, func() error {
+		var loadErr error
+		snapshot, loadErr = s.database.Snapshot(
+			ctx,
+			s.host,
+			s.runner.Running(),
+			time.Now().UTC(),
+		)
+		return loadErr
+	})
+	if err != nil {
+		return model.Snapshot{}, err
+	}
+	snapshot.Host = s.host
+	snapshot.Viewer = s.viewer
+	snapshot.Notifications.Supported = s.notificationsSupported
+	if snapshot.Items == nil {
+		snapshot.Items = make([]model.WorkItem, 0)
+	}
+	if s.decorator != nil {
+		s.decorator.Decorate(snapshot.Items)
+	}
+	return snapshot, nil
+}
+
+func (s *snapshotSource) UpdateNotificationPreferences(
+	ctx context.Context,
+	update model.NotificationPreferencesUpdate,
+) error {
+	return store.RetryBusy(ctx, func() error {
+		return s.database.UpdateNotificationPreferences(ctx, update)
+	})
+}
+
+type terminalSnapshotSource struct {
+	mu                   sync.Mutex
+	source               *snapshotSource
+	observeNotifications func(context.Context, model.Snapshot)
+	signalSnapshotUpdate func()
 }
 
 func (s *terminalSnapshotSource) Snapshot(
@@ -362,19 +437,9 @@ func (s *terminalSnapshotSource) Snapshot(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snapshot, err := s.database.Snapshot(
-		ctx,
-		s.host,
-		s.runner.Running(),
-		time.Now().UTC(),
-	)
+	snapshot, err := s.source.Snapshot(ctx)
 	if err != nil {
 		return model.Snapshot{}, err
-	}
-	snapshot.Viewer = s.viewer
-	snapshot.Notifications.Supported = s.notificationsSupported
-	if s.decorator != nil {
-		s.decorator.Decorate(snapshot.Items)
 	}
 	if s.observeNotifications != nil {
 		s.observeNotifications(ctx, snapshot)
@@ -387,10 +452,7 @@ func (s *terminalSnapshotSource) UpdateNotificationPreferences(
 	update model.NotificationPreferencesUpdate,
 ) error {
 	s.mu.Lock()
-	err := s.database.UpdateNotificationPreferences(
-		ctx,
-		update,
-	)
+	err := s.source.UpdateNotificationPreferences(ctx, update)
 	s.mu.Unlock()
 	if err != nil {
 		return fmt.Errorf("save notification settings: %w", err)

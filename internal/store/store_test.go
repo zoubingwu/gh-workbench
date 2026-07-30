@@ -1224,13 +1224,21 @@ func TestOpenMigratesLegacyColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() migration error = %v", err)
 	}
-	defer database.Close()
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
 
 	rows, err := database.db.Query("PRAGMA table_info(work_items)")
 	if err != nil {
 		t.Fatalf("inspect migrated schema: %v", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("close migrated schema: %v", err)
+		}
+	}()
 	columns := make(map[string]struct{})
 	for rows.Next() {
 		var (
@@ -1406,7 +1414,11 @@ func TestOpenClearsActivityETagWithoutReviewCommentCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() with initialized empty review cache error = %v", err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
 	if err := reopened.db.QueryRow(
 		"SELECT etag FROM poll_resources WHERE resource_key = ?",
 		model.ActivityResourceKey(item.RepositoryKey, item.Number),

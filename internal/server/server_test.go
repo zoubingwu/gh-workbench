@@ -21,26 +21,31 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	defaultPreferences := model.NotificationPreferences{
 		OnlyMyPullRequests: true,
 	}
-	database := &fakeSnapshotStore{
+	snapshotPreferences := defaultPreferences
+	snapshotPreferences.Supported = testNotificationsSupported
+	source := &fakeSnapshotSource{
 		preferences: defaultPreferences,
 		snapshot: model.Snapshot{
+			Host:            "github.com",
+			Viewer:          "octocat",
 			RepositoryCount: 2,
 			GeneratedAt:     time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC),
-			Notifications:   defaultPreferences,
+			Notifications:   snapshotPreferences,
 			Items: []model.WorkItem{{
 				Kind: model.ItemKindPullRequest,
+				LocalAgentActivity: &model.LocalAgentActivity{
+					State:        model.LocalAgentStateWorking,
+					Providers:    []string{"codex"},
+					SessionCount: 1,
+					Confidence:   model.LocalAgentConfidenceHeuristic,
+				},
 			}},
 		},
 	}
 	controller := &fakeController{}
-	decorator := &fakeItemDecorator{}
 	server, err := New(
-		database,
+		source,
 		controller,
-		"github.com",
-		"octocat",
-		testNotificationsSupported,
-		decorator,
 		nil,
 	)
 	if err != nil {
@@ -76,8 +81,8 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("authenticated bootstrap status = %d, want 200", response.Code)
 	}
-	if database.scope != "github.com" {
-		t.Fatalf("snapshot scope = %q, want github.com", database.scope)
+	if source.snapshotCalls != 1 {
+		t.Fatalf("snapshot source calls = %d, want 1", source.snapshotCalls)
 	}
 	var snapshot model.Snapshot
 	if err := json.NewDecoder(response.Body).Decode(&snapshot); err != nil {
@@ -103,14 +108,9 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 			testNotificationsSupported,
 		)
 	}
-	if !decorator.called ||
-		len(snapshot.Items) != 1 ||
+	if len(snapshot.Items) != 1 ||
 		snapshot.Items[0].LocalAgentActivity == nil {
-		t.Fatalf(
-			"decorated snapshot = %#v, decorator called = %t",
-			snapshot.Items,
-			decorator.called,
-		)
+		t.Fatalf("source snapshot items = %#v", snapshot.Items)
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/api/sync", nil)
@@ -212,15 +212,15 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 			expectedResponse,
 		)
 	}
-	if database.preferences != expectedPreferences {
+	if source.preferences != expectedPreferences {
 		t.Fatalf(
 			"saved preferences = %#v, want %#v",
-			database.preferences,
+			source.preferences,
 			expectedPreferences,
 		)
 	}
-	if database.saveCalls != 1 {
-		t.Fatalf("notification preference saves = %d, want 1", database.saveCalls)
+	if source.saveCalls != 1 {
+		t.Fatalf("notification preference saves = %d, want 1", source.saveCalls)
 	}
 
 	select {
@@ -251,12 +251,8 @@ func TestServerRejectsNonLoopbackHost(t *testing.T) {
 	t.Parallel()
 
 	server, err := New(
-		&fakeSnapshotStore{},
+		&fakeSnapshotSource{},
 		&fakeController{},
-		"github.com",
-		"octocat",
-		testNotificationsSupported,
-		nil,
 		nil,
 	)
 	if err != nil {
@@ -275,19 +271,15 @@ func TestServerRejectsNonLoopbackHost(t *testing.T) {
 func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
 	t.Parallel()
 
-	database := &serializationCheckingStore{}
+	source := &serializationCheckingSource{}
 	var (
 		server                    *Server
 		observerCalls             int
 		unserializedObserverCalls int
 	)
 	server, err := New(
-		database,
+		source,
 		&fakeController{},
-		"github.com",
-		"octocat",
-		testNotificationsSupported,
-		nil,
 		func(_ context.Context, _ model.Snapshot) {
 			observerCalls++
 			if server.publicationMu.TryLock() {
@@ -299,7 +291,7 @@ func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	database.publicationMu = &server.publicationMu
+	source.publicationMu = &server.publicationMu
 
 	if _, err := server.PublishSnapshot(t.Context()); err != nil {
 		t.Fatalf("PublishSnapshot() error = %v", err)
@@ -322,10 +314,10 @@ func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("save notifications status = %d, want 200", response.Code)
 	}
-	if database.unserializedCalls != 0 {
+	if source.unserializedCalls != 0 {
 		t.Fatalf(
 			"unserialized store calls = %d, want 0",
-			database.unserializedCalls,
+			source.unserializedCalls,
 		)
 	}
 	if unserializedObserverCalls != 0 {
@@ -337,11 +329,11 @@ func TestServerSerializesNotificationSaveAndSnapshotPublication(t *testing.T) {
 	if observerCalls != 1 {
 		t.Fatalf("snapshot observer calls = %d, want 1", observerCalls)
 	}
-	if database.snapshotCalls != 2 || database.saveCalls != 1 {
+	if source.snapshotCalls != 2 || source.saveCalls != 1 {
 		t.Fatalf(
 			"store calls = %d snapshots, %d saves; want 2 snapshots, 1 save",
-			database.snapshotCalls,
-			database.saveCalls,
+			source.snapshotCalls,
+			source.saveCalls,
 		)
 	}
 }
@@ -350,12 +342,8 @@ func TestServerServesEmbeddedIndexWithoutRedirect(t *testing.T) {
 	t.Parallel()
 
 	server, err := New(
-		&fakeSnapshotStore{},
+		&fakeSnapshotSource{},
 		&fakeController{},
-		"github.com",
-		"octocat",
-		testNotificationsSupported,
-		nil,
 		nil,
 	)
 	if err != nil {
@@ -378,24 +366,16 @@ func TestServerInstancesUseDistinctSessionCookies(t *testing.T) {
 	t.Parallel()
 
 	first, err := New(
-		&fakeSnapshotStore{},
+		&fakeSnapshotSource{},
 		&fakeController{},
-		"github.com",
-		"octocat",
-		testNotificationsSupported,
-		nil,
 		nil,
 	)
 	if err != nil {
 		t.Fatalf("first New() error = %v", err)
 	}
 	second, err := New(
-		&fakeSnapshotStore{},
+		&fakeSnapshotSource{},
 		&fakeController{},
-		"github.com",
-		"hubot",
-		testNotificationsSupported,
-		nil,
 		nil,
 	)
 	if err != nil {
@@ -418,24 +398,21 @@ func TestServerInstancesUseDistinctSessionCookies(t *testing.T) {
 	}
 }
 
-type fakeSnapshotStore struct {
-	snapshot    model.Snapshot
-	preferences model.NotificationPreferences
-	scope       string
-	saveCalls   int
+type fakeSnapshotSource struct {
+	snapshot      model.Snapshot
+	preferences   model.NotificationPreferences
+	snapshotCalls int
+	saveCalls     int
 }
 
-func (f *fakeSnapshotStore) Snapshot(
+func (f *fakeSnapshotSource) Snapshot(
 	_ context.Context,
-	scope string,
-	_ bool,
-	_ time.Time,
 ) (model.Snapshot, error) {
-	f.scope = scope
+	f.snapshotCalls++
 	return f.snapshot, nil
 }
 
-func (f *fakeSnapshotStore) UpdateNotificationPreferences(
+func (f *fakeSnapshotSource) UpdateNotificationPreferences(
 	_ context.Context,
 	update model.NotificationPreferencesUpdate,
 ) error {
@@ -445,7 +422,7 @@ func (f *fakeSnapshotStore) UpdateNotificationPreferences(
 	return nil
 }
 
-type serializationCheckingStore struct {
+type serializationCheckingSource struct {
 	publicationMu     *sync.Mutex
 	snapshot          model.Snapshot
 	snapshotCalls     int
@@ -453,18 +430,15 @@ type serializationCheckingStore struct {
 	unserializedCalls int
 }
 
-func (f *serializationCheckingStore) Snapshot(
+func (f *serializationCheckingSource) Snapshot(
 	_ context.Context,
-	_ string,
-	_ bool,
-	_ time.Time,
 ) (model.Snapshot, error) {
 	f.recordSerialization()
 	f.snapshotCalls++
 	return f.snapshot, nil
 }
 
-func (f *serializationCheckingStore) UpdateNotificationPreferences(
+func (f *serializationCheckingSource) UpdateNotificationPreferences(
 	_ context.Context,
 	update model.NotificationPreferencesUpdate,
 ) error {
@@ -486,7 +460,7 @@ func applyNotificationPreferencesUpdate(
 	}
 }
 
-func (f *serializationCheckingStore) recordSerialization() {
+func (f *serializationCheckingSource) recordSerialization() {
 	if f.publicationMu.TryLock() {
 		f.unserializedCalls++
 		f.publicationMu.Unlock()
@@ -494,30 +468,9 @@ func (f *serializationCheckingStore) recordSerialization() {
 }
 
 type fakeController struct {
-	running  bool
 	triggers int
-}
-
-type fakeItemDecorator struct {
-	called bool
-}
-
-func (f *fakeItemDecorator) Decorate(items []model.WorkItem) {
-	f.called = true
-	for index := range items {
-		items[index].LocalAgentActivity = &model.LocalAgentActivity{
-			State:        model.LocalAgentStateWorking,
-			Providers:    []string{"codex"},
-			SessionCount: 1,
-			Confidence:   model.LocalAgentConfidenceHeuristic,
-		}
-	}
 }
 
 func (f *fakeController) Trigger() {
 	f.triggers++
-}
-
-func (f *fakeController) Running() bool {
-	return f.running
 }

@@ -124,7 +124,7 @@ func TestRunnerBatchesActivitiesAndPollsReactions(t *testing.T) {
 		case updates <- struct{}{}:
 		default:
 		}
-	})
+	}, nil)
 	done := make(chan error, 1)
 	go func() {
 		done <- runner.Run(ctx)
@@ -242,7 +242,7 @@ func TestRunnerReportsTransientErrorAfterThreeConsecutiveFailures(t *testing.T) 
 		return model.PollResource{}
 	}
 
-	runner := New(database, &fakeSource{}, host, "octocat", 1, nil)
+	runner := New(database, &fakeSource{}, host, "octocat", 1, nil, nil)
 	resource := loadResource()
 	pollErr := errors.New("network unavailable")
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -389,7 +389,7 @@ func TestRunnerRecordsActivityBatchRateLimitForEveryResource(t *testing.T) {
 		case updates <- struct{}{}:
 		default:
 		}
-	})
+	}, nil)
 	done := make(chan error, 1)
 	go func() {
 		done <- runner.Run(ctx)
