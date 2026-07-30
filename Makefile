@@ -7,7 +7,7 @@ build:
 	pnpm --dir web build
 	go build ./cmd/gh-workbench
 
-check:
+check: lint
 	pnpm --dir web check
 	go test -race ./...
 	go vet ./...

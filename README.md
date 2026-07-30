@@ -134,10 +134,11 @@ Requirements:
 
 ```sh
 make install
-make lint
 make check
 make dev
 ```
+
+`make check` includes Go linting. Run `make lint` for the standalone Go lint pass.
 
 `make dev` builds the frontend and starts the account workbench from this
 checkout. After installation, `gh workbench` starts from any directory. Set
