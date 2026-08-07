@@ -1244,7 +1244,43 @@ func (s *Store) SavePollResource(
 	ctx context.Context,
 	resource model.PollResource,
 ) error {
-	result, err := s.db.ExecContext(
+	return savePollResource(ctx, s.db, resource)
+}
+
+func (s *Store) SavePollResources(
+	ctx context.Context,
+	resources []model.PollResource,
+) error {
+	if len(resources) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin poll resource batch: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, resource := range resources {
+		if err := savePollResource(ctx, tx, resource); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit poll resource batch: %w", err)
+	}
+	return nil
+}
+
+type pollResourceExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func savePollResource(
+	ctx context.Context,
+	execer pollResourceExecer,
+	resource model.PollResource,
+) error {
+	result, err := execer.ExecContext(
 		ctx,
 		`UPDATE poll_resources SET
 			etag = ?,

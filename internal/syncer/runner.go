@@ -65,6 +65,7 @@ type Storage interface {
 		*model.Activity,
 	) (bool, bool, error)
 	SavePollResource(context.Context, model.PollResource) error
+	SavePollResources(context.Context, []model.PollResource) error
 	ForceDue(context.Context, string, time.Time) error
 }
 
@@ -378,7 +379,7 @@ func (r *Runner) pollActivities(
 		return publish, errors.Join(resultErr, saveErr)
 	}
 
-	publish := false
+	outcomes := make([]pollResourceOutcome, 0, len(resources))
 	saveErrors := make([]error, 0)
 	for index, resource := range resources {
 		result := results[index]
@@ -392,17 +393,12 @@ func (r *Runner) pollActivities(
 			result.LatestReviewComment,
 		)
 		if err != nil {
-			itemPublished, saveErr := r.savePollOutcome(
-				ctx,
-				resource,
-				OutcomeFailed,
-				err,
-			)
-			publish = publish || itemPublished
+			outcomes = append(outcomes, pollResourceOutcome{
+				resource: resource,
+				outcome:  OutcomeFailed,
+				err:      err,
+			})
 			saveErrors = append(saveErrors, err)
-			if saveErr != nil {
-				saveErrors = append(saveErrors, saveErr)
-			}
 			continue
 		}
 		if !applied {
@@ -414,11 +410,14 @@ func (r *Runner) pollActivities(
 		if changed {
 			outcome = OutcomeChanged
 		}
-		itemPublished, err := r.savePollOutcome(ctx, resource, outcome, nil)
-		publish = publish || itemPublished
-		if err != nil {
-			saveErrors = append(saveErrors, err)
-		}
+		outcomes = append(outcomes, pollResourceOutcome{
+			resource: resource,
+			outcome:  outcome,
+		})
+	}
+	publish, err := r.savePollOutcomes(ctx, outcomes)
+	if err != nil {
+		saveErrors = append(saveErrors, err)
 	}
 	return publish, errors.Join(saveErrors...)
 }
@@ -428,21 +427,15 @@ func (r *Runner) saveActivityBatchFailure(
 	resources []model.PollResource,
 	pollErr error,
 ) (bool, error) {
-	publish := false
-	saveErrors := make([]error, 0)
+	outcomes := make([]pollResourceOutcome, 0, len(resources))
 	for _, resource := range resources {
-		itemPublished, err := r.savePollOutcome(
-			ctx,
-			resource,
-			OutcomeFailed,
-			pollErr,
-		)
-		publish = publish || itemPublished
-		if err != nil {
-			saveErrors = append(saveErrors, err)
-		}
+		outcomes = append(outcomes, pollResourceOutcome{
+			resource: resource,
+			outcome:  OutcomeFailed,
+			err:      pollErr,
+		})
 	}
-	return publish, errors.Join(saveErrors...)
+	return r.savePollOutcomes(ctx, outcomes)
 }
 
 func (r *Runner) poll(
@@ -562,6 +555,45 @@ func (r *Runner) savePollOutcome(
 	outcome Outcome,
 	pollErr error,
 ) (bool, error) {
+	resource, publish := r.applyPollOutcome(resource, outcome, pollErr)
+	if err := r.store.SavePollResource(ctx, resource); err != nil {
+		return false, err
+	}
+	return publish, nil
+}
+
+type pollResourceOutcome struct {
+	resource model.PollResource
+	outcome  Outcome
+	err      error
+}
+
+func (r *Runner) savePollOutcomes(
+	ctx context.Context,
+	outcomes []pollResourceOutcome,
+) (bool, error) {
+	resources := make([]model.PollResource, 0, len(outcomes))
+	publish := false
+	for _, outcome := range outcomes {
+		resource, itemPublished := r.applyPollOutcome(
+			outcome.resource,
+			outcome.outcome,
+			outcome.err,
+		)
+		resources = append(resources, resource)
+		publish = publish || itemPublished
+	}
+	if err := r.store.SavePollResources(ctx, resources); err != nil {
+		return false, err
+	}
+	return publish, nil
+}
+
+func (r *Runner) applyPollOutcome(
+	resource model.PollResource,
+	outcome Outcome,
+	pollErr error,
+) (model.PollResource, bool) {
 	lastError := resource.LastError
 	errorWasReported := lastError != ""
 	completedAt := time.Now().UTC()
@@ -601,11 +633,8 @@ func (r *Runner) savePollOutcome(
 		resource.NextPollAt = pauseUntil
 	}
 
-	if err := r.store.SavePollResource(ctx, resource); err != nil {
-		return false, err
-	}
 	publish := outcome == OutcomeChanged || resource.LastError != lastError
-	return publish, nil
+	return resource, publish
 }
 
 func latestItemUpdate(

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,7 +120,8 @@ func TestRunnerBatchesActivitiesAndPollsReactions(t *testing.T) {
 	}
 
 	updates := make(chan struct{}, 8)
-	runner := New(database, source, host, viewer, 2, func() {
+	recordingStore := &batchRecordingStore{Store: database}
+	runner := New(recordingStore, source, host, viewer, 2, func() {
 		select {
 		case updates <- struct{}{}:
 		default:
@@ -156,6 +158,12 @@ func TestRunnerBatchesActivitiesAndPollsReactions(t *testing.T) {
 				}
 				if calls := source.activityCalls.Load(); calls != 1 {
 					t.Fatalf("activity API calls = %d, want 1", calls)
+				}
+				if !slices.Equal(recordingStore.batchSizes, []int{2}) {
+					t.Fatalf(
+						"poll resource batch sizes = %v, want [2]",
+						recordingStore.batchSizes,
+					)
 				}
 				var targetCommit *model.Activity
 				for _, target := range source.activityTargets {
@@ -201,6 +209,19 @@ func TestRunnerBatchesActivitiesAndPollsReactions(t *testing.T) {
 			t.Fatal("runner did not publish a reaction snapshot")
 		}
 	}
+}
+
+type batchRecordingStore struct {
+	*store.Store
+	batchSizes []int
+}
+
+func (s *batchRecordingStore) SavePollResources(
+	ctx context.Context,
+	resources []model.PollResource,
+) error {
+	s.batchSizes = append(s.batchSizes, len(resources))
+	return s.Store.SavePollResources(ctx, resources)
 }
 
 func TestRunnerReportsTransientErrorAfterThreeConsecutiveFailures(t *testing.T) {

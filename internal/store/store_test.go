@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -841,6 +842,91 @@ func TestForceDueRefreshesSearchAndReactions(t *testing.T) {
 	}
 }
 
+func TestSavePollResourcesPreservesStaleResource(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(filepath.Join(t.TempDir(), "workbench.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	now := time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC)
+	host := "github.com"
+	if err := database.EnsureAccount(ctx, host, now); err != nil {
+		t.Fatalf("EnsureAccount() error = %v", err)
+	}
+	items := []model.WorkItem{
+		{
+			NodeID:        "I_api_1",
+			RepositoryKey: "github.com/acme/api",
+			Number:        1,
+			Kind:          model.ItemKindIssue,
+			Title:         "First issue",
+			URL:           "https://github.com/acme/api/issues/1",
+			State:         "open",
+			Author:        "octocat",
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			NodeID:        "I_api_2",
+			RepositoryKey: "github.com/acme/api",
+			Number:        2,
+			Kind:          model.ItemKindIssue,
+			Title:         "Second issue",
+			URL:           "https://github.com/acme/api/issues/2",
+			State:         "open",
+			Author:        "octocat",
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+	}
+	if _, err := database.ReplaceRelevantOpenItems(ctx, host, items, now); err != nil {
+		t.Fatalf("ReplaceRelevantOpenItems() error = %v", err)
+	}
+	resources, err := database.ListDueResources(ctx, host, now.Add(time.Second), 10)
+	if err != nil {
+		t.Fatalf("ListDueResources() error = %v", err)
+	}
+	resources = slices.DeleteFunc(resources, func(resource model.PollResource) bool {
+		return resource.Kind != model.ResourceKindActivity
+	})
+	if len(resources) != 2 {
+		t.Fatalf("activity resources = %d, want 2", len(resources))
+	}
+	for index := range resources {
+		resources[index].NextPollAt = now.Add(time.Hour)
+	}
+	if err := database.SavePollResources(ctx, resources); err != nil {
+		t.Fatalf("SavePollResources() error = %v", err)
+	}
+
+	stale := resources[0]
+	fresh := resources[1]
+	fresh.Revision++
+	stale.NextPollAt = now.Add(24 * time.Hour)
+	fresh.NextPollAt = now.Add(24 * time.Hour)
+	if err := database.SavePollResources(ctx, []model.PollResource{stale, fresh}); err != nil {
+		t.Fatalf("SavePollResources() with stale resource error = %v", err)
+	}
+	due, err := database.ListDueResources(ctx, host, now.Add(2*time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListDueResources() after batch error = %v", err)
+	}
+	due = slices.DeleteFunc(due, func(resource model.PollResource) bool {
+		return resource.Kind != model.ResourceKindActivity
+	})
+	if len(due) != 1 || due[0].Key != stale.Key {
+		t.Fatalf("resources due after stale batch = %#v, want only %q", due, stale.Key)
+	}
+}
+
 func TestSnapshotReportsActivityPollError(t *testing.T) {
 	t.Parallel()
 
@@ -1416,4 +1502,116 @@ func TestOpenClearsActivityETagWithoutReviewCommentCache(t *testing.T) {
 	if etag != `"empty-inline"` {
 		t.Fatalf("empty-cache ETag = %q, want retained value", etag)
 	}
+}
+
+func BenchmarkSavePollResources(b *testing.B) {
+	tests := []struct {
+		name string
+		save func(context.Context, *Store, []model.PollResource) error
+	}{
+		{
+			name: "individual",
+			save: func(ctx context.Context, database *Store, resources []model.PollResource) error {
+				for _, resource := range resources {
+					if err := database.SavePollResource(ctx, resource); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
+		{
+			name: "batch",
+			save: func(ctx context.Context, database *Store, resources []model.PollResource) error {
+				return database.SavePollResources(ctx, resources)
+			},
+		},
+	}
+	for _, test := range tests {
+		b.Run(test.name, func(b *testing.B) {
+			ctx := context.Background()
+			database, resources := benchmarkPollResources(b, ctx)
+			b.ResetTimer()
+			for b.Loop() {
+				if err := test.save(ctx, database, resources); err != nil {
+					b.Fatalf("save poll resources error = %v", err)
+				}
+				for index := range resources {
+					resources[index].Revision++
+				}
+			}
+			b.StopTimer()
+			var busy, logFrames, checkpointedFrames int
+			if err := database.db.QueryRow(
+				"PRAGMA wal_checkpoint(PASSIVE)",
+			).Scan(&busy, &logFrames, &checkpointedFrames); err != nil {
+				b.Fatalf("inspect WAL frames error = %v", err)
+			}
+			if busy != 0 || checkpointedFrames != logFrames {
+				b.Fatalf(
+					"WAL checkpoint = busy %d, log %d, checkpointed %d",
+					busy,
+					logFrames,
+					checkpointedFrames,
+				)
+			}
+			b.ReportMetric(float64(logFrames)/float64(b.N), "wal-frames/op")
+		})
+	}
+}
+
+func benchmarkPollResources(
+	b *testing.B,
+	ctx context.Context,
+) (*Store, []model.PollResource) {
+	b.Helper()
+	database, err := Open(filepath.Join(b.TempDir(), "workbench.db"))
+	if err != nil {
+		b.Fatalf("Open() error = %v", err)
+	}
+	b.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			b.Errorf("Close() error = %v", err)
+		}
+	})
+
+	now := time.Now().UTC()
+	if err := database.EnsureAccount(ctx, "github.com", now); err != nil {
+		b.Fatalf("EnsureAccount() error = %v", err)
+	}
+	items := make([]model.WorkItem, 50)
+	for index := range items {
+		items[index] = model.WorkItem{
+			NodeID:        fmt.Sprintf("I_%d", index),
+			RepositoryKey: "github.com/acme/api",
+			Number:        index + 1,
+			Kind:          model.ItemKindIssue,
+			Title:         "Track write amplification",
+			URL:           fmt.Sprintf("https://github.com/acme/api/issues/%d", index+1),
+			State:         "open",
+			Author:        "octocat",
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+	}
+	if _, err := database.ReplaceRelevantOpenItems(ctx, "github.com", items, now); err != nil {
+		b.Fatalf("ReplaceRelevantOpenItems() error = %v", err)
+	}
+	resources, err := database.ListDueResources(ctx, "github.com", now.Add(time.Second), 100)
+	if err != nil {
+		b.Fatalf("ListDueResources() error = %v", err)
+	}
+	resources = slices.DeleteFunc(resources, func(resource model.PollResource) bool {
+		return resource.Kind != model.ResourceKindActivity
+	})
+	if len(resources) != 50 {
+		b.Fatalf("activity resources = %d, want 50", len(resources))
+	}
+	if _, err := database.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		b.Fatalf("truncate benchmark WAL error = %v", err)
+	}
+	if _, err := database.db.Exec("PRAGMA wal_autocheckpoint = 0"); err != nil {
+		b.Fatalf("disable benchmark WAL autocheckpoint error = %v", err)
+	}
+	return database, resources
 }
