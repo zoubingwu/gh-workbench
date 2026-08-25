@@ -60,9 +60,9 @@ func runDemo(ctx context.Context, options Options) error {
 func newDemoBackend() *demoBackend {
 	return &demoBackend{
 		notifications: model.NotificationPreferences{
-			Supported:          true,
-			Enabled:            true,
-			OnlyMyPullRequests: true,
+			Supported: true,
+			Enabled:   true,
+			OnlyMine:  true,
 		},
 	}
 }
@@ -291,8 +291,8 @@ func (b *demoBackend) UpdateNotificationPreferences(
 	if update.Enabled != nil {
 		b.notifications.Enabled = *update.Enabled
 	}
-	if update.OnlyMyPullRequests != nil {
-		b.notifications.OnlyMyPullRequests = *update.OnlyMyPullRequests
+	if update.OnlyMine != nil {
+		b.notifications.OnlyMine = *update.OnlyMine
 	}
 	return nil
 }

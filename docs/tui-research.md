@@ -65,7 +65,7 @@ The first version should stay read-focused and use the data already present in
 | `k`, `up` | Select previous item |
 | `pgdown`, `pgup` | Move by one visible page |
 | `1`, `2`, `3` | Show all items, pull requests, or issues |
-| `m` | Toggle pull requests authored by the active account |
+| `m` | Toggle items authored by the active account |
 | `i` | Toggle inactive items |
 | `r` | Call `syncer.Runner.Trigger()` |
 | `enter`, `o` | Open the selected GitHub URL with the existing browser launcher |

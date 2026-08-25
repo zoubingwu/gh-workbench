@@ -131,7 +131,7 @@ func (m terminalModel) filterLine() string {
 func (m terminalModel) controlLines() []string {
 	filterLine := m.filterLine()
 	optionLine := m.notificationCheckbox() + "  " +
-		checkbox(m.onlyMine) + " Only my PRs (m)  " +
+		checkbox(m.onlyMine) + " Only mine (m)  " +
 		checkbox(m.showInactive) + " Show inactive (i)"
 	combined := filterLine + "  │  " + optionLine
 	if ansi.StringWidth(combined) <= m.width {

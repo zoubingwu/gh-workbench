@@ -152,7 +152,7 @@ func (s *Store) NotificationPreferences(
 		WHERE id = 1`,
 	).Scan(
 		&preferences.Enabled,
-		&preferences.OnlyMyPullRequests,
+		&preferences.OnlyMine,
 	); err != nil {
 		return model.NotificationPreferences{}, fmt.Errorf(
 			"load notification preferences: %w",
@@ -171,16 +171,16 @@ func (s *Store) UpdateNotificationPreferences(
 		value     bool
 	)
 	switch {
-	case update.Enabled != nil && update.OnlyMyPullRequests == nil:
+	case update.Enabled != nil && update.OnlyMine == nil:
 		statement = `UPDATE notification_preferences
 			SET enabled = ?
 			WHERE id = 1`
 		value = *update.Enabled
-	case update.Enabled == nil && update.OnlyMyPullRequests != nil:
+	case update.Enabled == nil && update.OnlyMine != nil:
 		statement = `UPDATE notification_preferences
 			SET only_my_pull_requests = ?
 			WHERE id = 1`
-		value = *update.OnlyMyPullRequests
+		value = *update.OnlyMine
 	default:
 		return errors.New("update exactly one notification preference")
 	}

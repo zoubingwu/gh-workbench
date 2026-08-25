@@ -163,41 +163,17 @@ func (c *Client) FetchRelevantOpenItems(
 	host string,
 	viewer string,
 ) (model.ItemsResult, error) {
-	authored, err := c.searchOpenItems(
+	involved, err := c.searchOpenItems(
 		ctx,
 		host,
 		fmt.Sprintf(
-			"is:open author:%s archived:false sort:updated-desc",
+			"is:open involves:%s archived:false sort:updated-desc",
 			viewer,
 		),
 		false,
 	)
 	if err != nil {
-		return model.ItemsResult{}, fmt.Errorf("search open items authored by %s: %w", viewer, err)
-	}
-	assigned, err := c.searchOpenItems(
-		ctx,
-		host,
-		fmt.Sprintf(
-			"is:open assignee:%s archived:false sort:updated-desc",
-			viewer,
-		),
-		false,
-	)
-	if err != nil {
-		return model.ItemsResult{}, fmt.Errorf("search open items assigned to %s: %w", viewer, err)
-	}
-	mentioned, err := c.searchOpenItems(
-		ctx,
-		host,
-		fmt.Sprintf(
-			"is:open mentions:%s archived:false sort:updated-desc",
-			viewer,
-		),
-		false,
-	)
-	if err != nil {
-		return model.ItemsResult{}, fmt.Errorf("search open items mentioning %s: %w", viewer, err)
+		return model.ItemsResult{}, fmt.Errorf("search open items involving %s: %w", viewer, err)
 	}
 	reviewed, err := c.searchOpenItems(
 		ctx,
@@ -234,15 +210,9 @@ func (c *Client) FetchRelevantOpenItems(
 
 	byURL := make(
 		map[string]model.WorkItem,
-		len(authored)+len(assigned)+len(mentioned)+len(reviewed)+len(reviewRequested),
+		len(involved)+len(reviewed)+len(reviewRequested),
 	)
-	for _, item := range authored {
-		byURL[item.URL] = item
-	}
-	for _, item := range assigned {
-		byURL[item.URL] = item
-	}
-	for _, item := range mentioned {
+	for _, item := range involved {
 		byURL[item.URL] = item
 	}
 	for _, item := range reviewed {
@@ -291,13 +261,6 @@ func (c *Client) searchOpenItems(
 		}
 		if totalCount == -1 {
 			totalCount = result.Data.Search.IssueCount
-			if totalCount > maxSearchPages*pageSize {
-				return nil, fmt.Errorf(
-					"paginate GitHub search: reported %d items, exceeding the accessible limit of %d",
-					totalCount,
-					maxSearchPages*pageSize,
-				)
-			}
 		} else if result.Data.Search.IssueCount != totalCount {
 			return nil, fmt.Errorf(
 				"paginate GitHub search: result count changed from %d to %d",
@@ -373,10 +336,11 @@ func (c *Client) searchOpenItems(
 		}
 
 		if !result.Data.Search.PageInfo.HasNextPage {
-			if fetchedCount != totalCount {
+			accessibleCount := min(totalCount, maxSearchPages*pageSize)
+			if fetchedCount != accessibleCount {
 				return nil, fmt.Errorf(
 					"paginate GitHub search: reported %d items but returned %d",
-					totalCount,
+					accessibleCount,
 					fetchedCount,
 				)
 			}
@@ -389,6 +353,9 @@ func (c *Client) searchOpenItems(
 		cursor = result.Data.Search.PageInfo.EndCursor
 	}
 
+	if totalCount > maxSearchPages*pageSize {
+		return items, nil
+	}
 	return nil, fmt.Errorf(
 		"paginate GitHub search: result exceeds %d items",
 		maxSearchPages*pageSize,

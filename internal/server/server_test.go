@@ -19,7 +19,7 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 	t.Parallel()
 
 	defaultPreferences := model.NotificationPreferences{
-		OnlyMyPullRequests: true,
+		OnlyMine: true,
 	}
 	database := &fakeSnapshotStore{
 		preferences: defaultPreferences,
@@ -200,8 +200,8 @@ func TestServerRequiresSessionAndSameOriginForCommands(t *testing.T) {
 		t.Fatalf("decode saved notification preferences: %v", err)
 	}
 	expectedPreferences := model.NotificationPreferences{
-		Enabled:            true,
-		OnlyMyPullRequests: true,
+		Enabled:  true,
+		OnlyMine: true,
 	}
 	expectedResponse := expectedPreferences
 	expectedResponse.Supported = testNotificationsSupported
@@ -481,8 +481,8 @@ func applyNotificationPreferencesUpdate(
 	if update.Enabled != nil {
 		preferences.Enabled = *update.Enabled
 	}
-	if update.OnlyMyPullRequests != nil {
-		preferences.OnlyMyPullRequests = *update.OnlyMyPullRequests
+	if update.OnlyMine != nil {
+		preferences.OnlyMine = *update.OnlyMine
 	}
 }
 

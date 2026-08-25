@@ -6,15 +6,18 @@ selected with `--browser`, backed by a loopback Go service and embedded React
 application.
 One process represents the active `gh` account and aggregates relevant open
 issues and pull requests through account-wide GitHub search. Relevance means
-authored, assigned, mentioned, reviewed, or review-requested. Account caches are
-isolated by GitHub host and viewer login. Demo mode supplies either UI with an
-in-memory synthetic snapshot.
+authored, assigned, mentioned, commented on, reviewed, or review-requested.
+Account caches are isolated by GitHub host and viewer login. Demo mode supplies
+either UI with an in-memory synthetic snapshot.
 
 ## Runtime and data flow
 
 1. `gh workbench` resolves the active keyring-backed GitHub CLI account.
-2. Account-wide GraphQL searches discover open items authored by, assigned to,
-   mentioning, or reviewed by the viewer.
+2. An account-wide GraphQL `involves` search discovers open items authored by,
+   assigned to, mentioning, or commented on by the viewer; a separate search
+   discovers pull requests already reviewed by the viewer. Each search treats
+   GitHub's most recently updated 1,000 accessible results as its bounded
+   workset.
 3. A review-requested search marks pull requests currently awaiting the viewer.
 4. Results are deduplicated across repositories and reconciled as one account
    resource. A missing item leaves snapshots immediately and remains cached for

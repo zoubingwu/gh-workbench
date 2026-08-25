@@ -29,11 +29,12 @@ func TestModelUsesBrowserViewDefaults(t *testing.T) {
 			RepositoryCount: 3,
 			GeneratedAt:     now,
 			Notifications: model.NotificationPreferences{
-				OnlyMyPullRequests: true,
+				OnlyMine: true,
 			},
 			Items: []model.WorkItem{
 				workItem("acme/api", 3, model.ItemKindPullRequest, "alice", now),
 				workItem("acme/docs", 8, model.ItemKindIssue, "bob", now),
+				workItem("acme/issues", 9, model.ItemKindIssue, "alice", now),
 				workItem("acme/api", 2, model.ItemKindPullRequest, "bob", now),
 				workItem(
 					"acme/old",
@@ -50,8 +51,8 @@ func TestModelUsesBrowserViewDefaults(t *testing.T) {
 	if got, want := len(items), 2; got != want {
 		t.Fatalf("visible items = %d, want %d", got, want)
 	}
-	if items[0].Number != 3 || items[1].Number != 8 {
-		t.Fatalf("visible item numbers = [%d %d], want [3 8]",
+	if items[0].Number != 3 || items[1].Number != 9 {
+		t.Fatalf("visible item numbers = [%d %d], want [3 9]",
 			items[0].Number,
 			items[1].Number,
 		)
@@ -66,13 +67,16 @@ func TestModelUsesBrowserViewDefaults(t *testing.T) {
 		"GitHub Workbench",
 		"alice@github.com",
 		"acme/api",
-		"acme/docs",
-		"Only my PRs",
+		"acme/issues",
+		"Only mine",
 		"Show inactive",
 	} {
 		if !strings.Contains(view, value) {
 			t.Fatalf("View() missing %q:\n%s", value, view)
 		}
+	}
+	if strings.Contains(view, "acme/docs") {
+		t.Fatalf("View() contains issue authored by another account:\n%s", view)
 	}
 	if strings.Contains(view, "acme/old") {
 		t.Fatalf("View() contains inactive repository:\n%s", view)
@@ -91,7 +95,7 @@ func TestModelFiltersAndTogglesItems(t *testing.T) {
 			Viewer:      "alice",
 			GeneratedAt: now,
 			Notifications: model.NotificationPreferences{
-				OnlyMyPullRequests: true,
+				OnlyMine: true,
 			},
 			Items: []model.WorkItem{
 				workItem("acme/api", 3, model.ItemKindPullRequest, "alice", now),
@@ -214,7 +218,7 @@ func TestModelKeepsSystemNotificationStateWhenSaveFails(t *testing.T) {
 	}
 }
 
-func TestModelUsesAndUpdatesPersistedOnlyMyPullRequests(t *testing.T) {
+func TestModelUsesAndUpdatesPersistedOnlyMine(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -224,7 +228,7 @@ func TestModelUsesAndUpdatesPersistedOnlyMyPullRequests(t *testing.T) {
 			_ context.Context,
 			update model.NotificationPreferencesUpdate,
 		) error {
-			savedOnlyMine = *update.OnlyMyPullRequests
+			savedOnlyMine = *update.OnlyMine
 			return nil
 		},
 	}, func() time.Time {
@@ -250,12 +254,12 @@ func TestModelUsesAndUpdatesPersistedOnlyMyPullRequests(t *testing.T) {
 	updated, command := current.Update(keyPress("m"))
 	current = updated.(terminalModel)
 	if command == nil {
-		t.Fatal("Only my PRs update command = nil")
+		t.Fatal("Only mine update command = nil")
 	}
 	current = updateModel(t, current, command())
 
 	if !savedOnlyMine {
-		t.Fatal("saved Only my PRs preference = false, want true")
+		t.Fatal("saved Only mine preference = false, want true")
 	}
 	if !current.onlyMine {
 		t.Fatal("onlyMine = false, want true")
@@ -265,9 +269,9 @@ func TestModelUsesAndUpdatesPersistedOnlyMyPullRequests(t *testing.T) {
 	}
 	if view := ansi.Strip(current.View().Content); !strings.Contains(
 		view,
-		"[x] Only my PRs (m)",
+		"[x] Only mine (m)",
 	) {
-		t.Fatalf("View() missing persisted Only my PRs checkbox:\n%s", view)
+		t.Fatalf("View() missing persisted Only mine checkbox:\n%s", view)
 	}
 }
 

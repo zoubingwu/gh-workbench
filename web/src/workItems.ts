@@ -19,7 +19,7 @@ export function filterByActivity<T extends { updatedAt: string }>(
   return items.filter((item) => !isInactive(item.updatedAt, now));
 }
 
-export function filterByPullRequestAuthor<T extends { kind: WorkItemKind; author: string }>(
+export function filterByViewerAuthor<T extends { author: string }>(
   items: readonly T[],
   viewer: string,
   onlyMine: boolean,
@@ -29,9 +29,7 @@ export function filterByPullRequestAuthor<T extends { kind: WorkItemKind; author
   }
 
   const normalizedViewer = viewer.toLowerCase();
-  return items.filter(
-    (item) => item.kind === "issue" || item.author.toLowerCase() === normalizedViewer,
-  );
+  return items.filter((item) => item.author.toLowerCase() === normalizedViewer);
 }
 
 export type RepositoryGroup<T> = {

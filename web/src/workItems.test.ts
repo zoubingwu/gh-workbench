@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   filterByActivity,
-  filterByPullRequestAuthor,
+  filterByViewerAuthor,
   groupByRepository,
   isInactive,
   workItemStatus,
@@ -30,19 +30,19 @@ describe("filterByActivity", () => {
   });
 });
 
-describe("filterByPullRequestAuthor", () => {
+describe("filterByViewerAuthor", () => {
   const items = [
     { id: "issue", kind: "issue" as const, author: "hubot" },
     { id: "mine", kind: "pull_request" as const, author: "OctoCat" },
     { id: "theirs", kind: "pull_request" as const, author: "hubot" },
   ];
 
-  it("keeps every issue and only pull requests authored by the viewer", () => {
-    expect(filterByPullRequestAuthor(items, "octocat", true)).toEqual([items[0], items[1]]);
+  it("keeps only issues and pull requests authored by the viewer", () => {
+    expect(filterByViewerAuthor(items, "octocat", true)).toEqual([items[1]]);
   });
 
   it("restores the full related item collection when disabled", () => {
-    expect(filterByPullRequestAuthor(items, "octocat", false)).toBe(items);
+    expect(filterByViewerAuthor(items, "octocat", false)).toBe(items);
   });
 });
 
