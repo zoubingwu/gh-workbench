@@ -74,7 +74,7 @@ func TestManagerSendsNewItemsAndActivity(t *testing.T) {
 	}
 }
 
-func TestManagerFiltersViewerActivityAndOtherPullRequests(t *testing.T) {
+func TestManagerFiltersViewerActivityAndItemsByOtherAuthors(t *testing.T) {
 	t.Parallel()
 
 	sender := &fakeSender{}
@@ -88,19 +88,22 @@ func TestManagerFiltersViewerActivityAndOtherPullRequests(t *testing.T) {
 	ownPullRequest.Number = 43
 	ownPullRequest.URL = "https://github.com/acme/web/pull/43"
 	ownPullRequest.Author = "OCTOCAT"
-	issue := testItem()
-	issue.Number = 44
-	issue.Kind = model.ItemKindIssue
-	issue.URL = "https://github.com/acme/web/issues/44"
+	otherIssue := testItem()
+	otherIssue.Number = 44
+	otherIssue.Kind = model.ItemKindIssue
+	otherIssue.URL = "https://github.com/acme/web/issues/44"
+	ownIssue := otherIssue
+	ownIssue.Number = 45
+	ownIssue.URL = "https://github.com/acme/web/issues/45"
+	ownIssue.Author = "octocat"
 
-	filtered := testSnapshot(otherPullRequest, ownPullRequest, issue)
-	filtered.Notifications.OnlyMyPullRequests = true
+	filtered := testSnapshot(otherPullRequest, ownPullRequest, otherIssue, ownIssue)
+	filtered.Notifications.OnlyMine = true
 	if err := manager.Observe(t.Context(), filtered); err != nil {
 		t.Fatalf("new items Observe() error = %v", err)
 	}
-	if len(sender.messages) != 1 ||
-		sender.messages[0].Title != "acme/web #44: Add system notifications" {
-		t.Fatalf("sent messages = %#v, want only issue", sender.messages)
+	if len(sender.messages) != 0 {
+		t.Fatalf("sent messages = %#v, want no new-item notifications", sender.messages)
 	}
 
 	ownPullRequest.LatestActivity = &model.Activity{
@@ -109,12 +112,12 @@ func TestManagerFiltersViewerActivityAndOtherPullRequests(t *testing.T) {
 		OccurredAt: time.Date(2026, time.July, 28, 12, 1, 0, 0, time.UTC),
 		URL:        ownPullRequest.URL + "#issuecomment-1",
 	}
-	filtered = testSnapshot(otherPullRequest, ownPullRequest, issue)
-	filtered.Notifications.OnlyMyPullRequests = true
+	filtered = testSnapshot(otherPullRequest, ownPullRequest, otherIssue, ownIssue)
+	filtered.Notifications.OnlyMine = true
 	if err := manager.Observe(t.Context(), filtered); err != nil {
 		t.Fatalf("own activity Observe() error = %v", err)
 	}
-	if len(sender.messages) != 1 {
+	if len(sender.messages) != 0 {
 		t.Fatalf("sent messages after own activity = %#v, want unchanged", sender.messages)
 	}
 
@@ -124,13 +127,13 @@ func TestManagerFiltersViewerActivityAndOtherPullRequests(t *testing.T) {
 		OccurredAt: time.Date(2026, time.July, 28, 12, 2, 0, 0, time.UTC),
 		URL:        ownPullRequest.URL + "#issuecomment-2",
 	}
-	filtered = testSnapshot(otherPullRequest, ownPullRequest, issue)
-	filtered.Notifications.OnlyMyPullRequests = true
+	filtered = testSnapshot(otherPullRequest, ownPullRequest, otherIssue, ownIssue)
+	filtered.Notifications.OnlyMine = true
 	if err := manager.Observe(t.Context(), filtered); err != nil {
 		t.Fatalf("other activity Observe() error = %v", err)
 	}
-	if len(sender.messages) != 2 ||
-		sender.messages[1].Body != "bob commented" {
+	if len(sender.messages) != 1 ||
+		sender.messages[0].Body != "bob commented" {
 		t.Fatalf(
 			"sent messages after other activity = %#v, want own pull request activity",
 			sender.messages,

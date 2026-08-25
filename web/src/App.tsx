@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import {
   filterByActivity,
-  filterByPullRequestAuthor,
+  filterByViewerAuthor,
   groupByRepository,
   isInactive,
   workItemStatus,
@@ -273,7 +273,7 @@ function App() {
   const [displayTime, setDisplayTime] = useState(() => Date.now());
   const notificationsSupported = snapshot?.notifications.supported ?? false;
   const notificationsEnabled = snapshot?.notifications.enabled ?? false;
-  const onlyMyPullRequests = snapshot?.notifications.onlyMyPullRequests ?? true;
+  const onlyMine = snapshot?.notifications.onlyMyPullRequests ?? true;
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -371,9 +371,8 @@ function App() {
   }, [snapshot?.generatedAt]);
 
   const accountScopedItems = useMemo(
-    () =>
-      filterByPullRequestAuthor(snapshot?.items ?? [], snapshot?.viewer ?? "", onlyMyPullRequests),
-    [snapshot?.items, snapshot?.viewer, onlyMyPullRequests],
+    () => filterByViewerAuthor(snapshot?.items ?? [], snapshot?.viewer ?? "", onlyMine),
+    [snapshot?.items, snapshot?.viewer, onlyMine],
   );
 
   const activityItems = useMemo(
@@ -441,7 +440,7 @@ function App() {
     }
   };
 
-  const updateOnlyMyPullRequests = (nextValue: boolean) =>
+  const updateOnlyMine = (nextValue: boolean) =>
     saveNotificationPreferences({
       onlyMyPullRequests: nextValue,
     });
@@ -556,13 +555,13 @@ function App() {
           <label className="list-toggle">
             <input
               type="checkbox"
-              checked={onlyMyPullRequests}
+              checked={onlyMine}
               onChange={(event) => {
-                void updateOnlyMyPullRequests(event.currentTarget.checked);
+                void updateOnlyMine(event.currentTarget.checked);
               }}
               disabled={!snapshot || savingNotifications}
             />
-            <span>Only my PRs</span>
+            <span>Only mine</span>
           </label>
           <label className="list-toggle">
             <input

@@ -132,10 +132,9 @@ func messageForChange(
 	exists bool,
 ) (Message, bool) {
 	isViewerItem := sameLogin(item.Author, snapshot.Viewer)
-	isFilteredPullRequest := item.Kind == model.ItemKindPullRequest &&
-		snapshot.Notifications.OnlyMyPullRequests &&
+	isFilteredItem := snapshot.Notifications.OnlyMine &&
 		!isViewerItem
-	if isFilteredPullRequest {
+	if isFilteredItem {
 		return Message{}, false
 	}
 

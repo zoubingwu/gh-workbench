@@ -19,9 +19,8 @@ The cursor seeds silently after the first successful sync, advances while
 notifications are disabled, preserves activity timestamps across transient
 search omissions, and ignores activity created by the active viewer.
 Enabling notifications starts delivery with the next qualifying change;
-previously observed activity remains in the cursor history. With “Only my PRs”
-enabled, pull requests authored by other accounts are filtered while relevant
-issues remain eligible.
+previously observed activity remains in the cursor history. With “Only mine”
+enabled, issues and pull requests authored by other accounts are filtered.
 
 `internal/notification` owns change detection and delivery. `internal/app`
 composes the sender and observes browser publications or TUI snapshot refreshes.
@@ -34,7 +33,7 @@ same-origin API. The TUI reads and updates the same preferences directly with
 the `n` and `m` keys:
 
 - `notificationsEnabled`
-- `onlyMyPullRequests`
+- `onlyMyPullRequests` (legacy storage and API name for the “Only mine” setting)
 
 The Go process must remain running for delivery. Sender failures produce one
 session warning while synchronization continues.

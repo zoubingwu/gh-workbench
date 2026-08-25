@@ -153,7 +153,7 @@ func (m terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.waitForUpdate()
 		}
 		m.snapshot = message.snapshot
-		m.onlyMine = message.snapshot.Notifications.OnlyMyPullRequests
+		m.onlyMine = message.snapshot.Notifications.OnlyMine
 		m.loaded = true
 		m.loadError = nil
 		m.reconcileSelection()
@@ -194,11 +194,11 @@ func (m terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.action = "System notifications disabled"
 			}
 		}
-		if message.update.OnlyMyPullRequests != nil {
-			onlyMine := *message.update.OnlyMyPullRequests
-			m.snapshot.Notifications.OnlyMyPullRequests = onlyMine
+		if message.update.OnlyMine != nil {
+			onlyMine := *message.update.OnlyMine
+			m.snapshot.Notifications.OnlyMine = onlyMine
 			m.onlyMine = onlyMine
-			m.action = "Only my PRs preference updated"
+			m.action = "Only mine preference updated"
 			m.reconcileSelection()
 		}
 	}
@@ -237,10 +237,10 @@ func (m terminalModel) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		update := model.NotificationPreferencesUpdate{
-			OnlyMyPullRequests: &onlyMine,
+			OnlyMine: &onlyMine,
 		}
 		m.savingNotificationPreferences = true
-		m.action = "Saving Only my PRs preference"
+		m.action = "Saving Only mine preference"
 		return m, m.saveNotificationPreferences(update)
 	case "i":
 		m.showInactive = !m.showInactive
@@ -430,7 +430,6 @@ func (m terminalModel) accountItems() []model.WorkItem {
 	items := make([]model.WorkItem, 0, len(m.snapshot.Items))
 	for _, item := range m.snapshot.Items {
 		if m.onlyMine &&
-			item.Kind == model.ItemKindPullRequest &&
 			!strings.EqualFold(item.Author, m.snapshot.Viewer) {
 			continue
 		}

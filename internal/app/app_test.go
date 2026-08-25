@@ -158,17 +158,17 @@ func TestTerminalSnapshotSourceObservesAndUpdatesNotifications(t *testing.T) {
 	onlyMine := false
 	if err := source.UpdateNotificationPreferences(
 		ctx,
-		model.NotificationPreferencesUpdate{OnlyMyPullRequests: &onlyMine},
+		model.NotificationPreferencesUpdate{OnlyMine: &onlyMine},
 	); err != nil {
-		t.Fatalf("UpdateNotificationPreferences(Only my PRs) error = %v", err)
+		t.Fatalf("UpdateNotificationPreferences(Only mine) error = %v", err)
 	}
 	preferences, err := database.NotificationPreferences(ctx)
 	if err != nil {
 		t.Fatalf("NotificationPreferences() error = %v", err)
 	}
-	if !preferences.Enabled || preferences.OnlyMyPullRequests {
+	if !preferences.Enabled || preferences.OnlyMine {
 		t.Fatalf(
-			"persisted notification preferences = %#v, want enabled and all PRs",
+			"persisted notification preferences = %#v, want enabled and all items",
 			preferences,
 		)
 	}

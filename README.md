@@ -2,9 +2,10 @@
 
 GitHub Workbench is a local workbench for GitHub issues and pull requests with
 browser and terminal interfaces. It runs as a GitHub CLI extension, finds open
-work authored by, assigned to, mentioning, reviewed by, or awaiting review from
-the active `gh` account across repositories, stores an account-scoped cache in
-SQLite, and keeps the selected UI current through adaptive polling.
+work authored by, assigned to, mentioning, commented on, reviewed by, or
+awaiting review from the active `gh` account across repositories, stores an
+account-scoped cache in SQLite, and keeps the selected UI current through
+adaptive polling.
 
 Browser interface:
 
@@ -56,7 +57,7 @@ as the browser work list. It accepts these keys:
 | `j`, `down`, `k`, `up` | Move the selection |
 | `pgdown`, `pgup` | Move by one visible page |
 | `1`, `2`, `3` | Show all items, pull requests, or issues |
-| `m` | Toggle the account-scoped “Only my PRs” filter |
+| `m` | Toggle the account-scoped “Only mine” filter |
 | `i` | Toggle inactive items |
 | `n` | Toggle macOS system notifications |
 | `r` | Sync now |
@@ -66,8 +67,8 @@ as the browser work list. It accepts these keys:
 The browser and terminal interfaces can enable account-scoped macOS system
 notifications. The Go process delivers informational notifications while it
 remains running; browser-mode delivery continues after its tab closes. The
-“Only my PRs” setting also controls which pull request activity can produce a
-system notification.
+“Only mine” setting also controls which work item activity can produce a system
+notification.
 
 Pull request rows show local Codex and Claude Code activity when a running
 session's Git checkout matches the pull request head repository, branch, or

@@ -41,9 +41,9 @@ func TestDemoBackendSnapshotCoversScreenshotStates(t *testing.T) {
 		t.Fatalf("item count = %d, want 7", len(snapshot.Items))
 	}
 	if !snapshot.Notifications.Enabled ||
-		!snapshot.Notifications.OnlyMyPullRequests {
+		!snapshot.Notifications.OnlyMine {
 		t.Fatalf(
-			"notification preferences = %#v, want enabled for my pull requests",
+				"notification preferences = %#v, want enabled and only mine",
 			snapshot.Notifications,
 		)
 	}

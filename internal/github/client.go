@@ -163,41 +163,17 @@ func (c *Client) FetchRelevantOpenItems(
 	host string,
 	viewer string,
 ) (model.ItemsResult, error) {
-	authored, err := c.searchOpenItems(
+	involved, err := c.searchOpenItems(
 		ctx,
 		host,
 		fmt.Sprintf(
-			"is:open author:%s archived:false sort:updated-desc",
+			"is:open involves:%s archived:false sort:updated-desc",
 			viewer,
 		),
 		false,
 	)
 	if err != nil {
-		return model.ItemsResult{}, fmt.Errorf("search open items authored by %s: %w", viewer, err)
-	}
-	assigned, err := c.searchOpenItems(
-		ctx,
-		host,
-		fmt.Sprintf(
-			"is:open assignee:%s archived:false sort:updated-desc",
-			viewer,
-		),
-		false,
-	)
-	if err != nil {
-		return model.ItemsResult{}, fmt.Errorf("search open items assigned to %s: %w", viewer, err)
-	}
-	mentioned, err := c.searchOpenItems(
-		ctx,
-		host,
-		fmt.Sprintf(
-			"is:open mentions:%s archived:false sort:updated-desc",
-			viewer,
-		),
-		false,
-	)
-	if err != nil {
-		return model.ItemsResult{}, fmt.Errorf("search open items mentioning %s: %w", viewer, err)
+		return model.ItemsResult{}, fmt.Errorf("search open items involving %s: %w", viewer, err)
 	}
 	reviewed, err := c.searchOpenItems(
 		ctx,
@@ -234,15 +210,9 @@ func (c *Client) FetchRelevantOpenItems(
 
 	byURL := make(
 		map[string]model.WorkItem,
-		len(authored)+len(assigned)+len(mentioned)+len(reviewed)+len(reviewRequested),
+		len(involved)+len(reviewed)+len(reviewRequested),
 	)
-	for _, item := range authored {
-		byURL[item.URL] = item
-	}
-	for _, item := range assigned {
-		byURL[item.URL] = item
-	}
-	for _, item := range mentioned {
+	for _, item := range involved {
 		byURL[item.URL] = item
 	}
 	for _, item := range reviewed {

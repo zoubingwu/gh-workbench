@@ -153,14 +153,14 @@ type SyncStatus struct {
 }
 
 type NotificationPreferences struct {
-	Supported          bool `json:"supported"`
-	Enabled            bool `json:"enabled"`
-	OnlyMyPullRequests bool `json:"onlyMyPullRequests"`
+	Supported bool `json:"supported"`
+	Enabled   bool `json:"enabled"`
+	OnlyMine  bool `json:"onlyMyPullRequests"`
 }
 
 type NotificationPreferencesUpdate struct {
-	Enabled            *bool `json:"enabled,omitempty"`
-	OnlyMyPullRequests *bool `json:"onlyMyPullRequests,omitempty"`
+	Enabled  *bool `json:"enabled,omitempty"`
+	OnlyMine *bool `json:"onlyMyPullRequests,omitempty"`
 }
 
 type Snapshot struct {

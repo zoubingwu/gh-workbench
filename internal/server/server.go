@@ -214,7 +214,7 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid notification settings")
 		return
 	}
-	if (update.Enabled == nil) == (update.OnlyMyPullRequests == nil) {
+	if (update.Enabled == nil) == (update.OnlyMine == nil) {
 		writeError(w, http.StatusBadRequest, "update one notification setting")
 		return
 	}
