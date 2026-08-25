@@ -261,13 +261,6 @@ func (c *Client) searchOpenItems(
 		}
 		if totalCount == -1 {
 			totalCount = result.Data.Search.IssueCount
-			if totalCount > maxSearchPages*pageSize {
-				return nil, fmt.Errorf(
-					"paginate GitHub search: reported %d items, exceeding the accessible limit of %d",
-					totalCount,
-					maxSearchPages*pageSize,
-				)
-			}
 		} else if result.Data.Search.IssueCount != totalCount {
 			return nil, fmt.Errorf(
 				"paginate GitHub search: result count changed from %d to %d",
@@ -343,10 +336,11 @@ func (c *Client) searchOpenItems(
 		}
 
 		if !result.Data.Search.PageInfo.HasNextPage {
-			if fetchedCount != totalCount {
+			accessibleCount := min(totalCount, maxSearchPages*pageSize)
+			if fetchedCount != accessibleCount {
 				return nil, fmt.Errorf(
 					"paginate GitHub search: reported %d items but returned %d",
-					totalCount,
+					accessibleCount,
 					fetchedCount,
 				)
 			}
@@ -359,6 +353,9 @@ func (c *Client) searchOpenItems(
 		cursor = result.Data.Search.PageInfo.EndCursor
 	}
 
+	if totalCount > maxSearchPages*pageSize {
+		return items, nil
+	}
 	return nil, fmt.Errorf(
 		"paginate GitHub search: result exceeds %d items",
 		maxSearchPages*pageSize,

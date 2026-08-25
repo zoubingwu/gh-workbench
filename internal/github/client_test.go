@@ -314,7 +314,57 @@ func TestClientSearchOpenItemsPaginatesCompleteResults(t *testing.T) {
 	}
 }
 
-func TestClientSearchOpenItemsRejectsTruncatedResults(t *testing.T) {
+func TestClientSearchOpenItemsReturnsAccessibleSearchWindow(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		page := requests
+		requests++
+		hasNextPage := page < maxSearchPages-1
+		endCursor := ""
+		if hasNextPage {
+			endCursor = "page-" + strconv.Itoa(page+2)
+		}
+		return jsonResponse(http.StatusOK, graphQLPageWithInfo(
+			graphQLIssuePage(page),
+			maxSearchPages*pageSize+1,
+			hasNextPage,
+			endCursor,
+		), nil), nil
+	})
+
+	client, err := NewWithBaseURL(
+		&http.Client{Transport: transport},
+		"https://api.example.test",
+	)
+	if err != nil {
+		t.Fatalf("NewWithBaseURL() error = %v", err)
+	}
+	client.gate.interval = 0
+
+	items, err := client.searchOpenItems(
+		context.Background(),
+		"github.com",
+		"is:open involves:octocat sort:updated-desc",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("searchOpenItems() error = %v", err)
+	}
+	if len(items) != maxSearchPages*pageSize {
+		t.Fatalf(
+			"len(searchOpenItems()) = %d, want %d",
+			len(items),
+			maxSearchPages*pageSize,
+		)
+	}
+	if requests != maxSearchPages {
+		t.Fatalf("search request count = %d, want %d", requests, maxSearchPages)
+	}
+}
+
+func TestClientSearchOpenItemsRejectsIncompleteResults(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -322,16 +372,6 @@ func TestClientSearchOpenItemsRejectsTruncatedResults(t *testing.T) {
 		response  string
 		wantError string
 	}{
-		{
-			name: "search limit",
-			response: graphQLPageWithInfo(
-				`[]`,
-				maxSearchPages*pageSize+1,
-				true,
-				"page-2",
-			),
-			wantError: "exceeding the accessible limit of 1000",
-		},
 		{
 			name: "incomplete final page",
 			response: graphQLPageWithInfo(`[
@@ -1580,6 +1620,31 @@ func graphQLPageWithInfo(
 		`},"nodes":` +
 		nodes +
 		`}}}`
+}
+
+func graphQLIssuePage(page int) string {
+	var nodes strings.Builder
+	nodes.WriteByte('[')
+	for index := range pageSize {
+		if index > 0 {
+			nodes.WriteByte(',')
+		}
+		number := page*pageSize + index + 1
+		nodes.WriteString(`{
+			"__typename":"Issue",
+			"number":`)
+		nodes.WriteString(strconv.Itoa(number))
+		nodes.WriteString(`,
+			"title":"Work item",
+			"url":"https://github.com/acme/rocket/issues/`)
+		nodes.WriteString(strconv.Itoa(number))
+		nodes.WriteString(`",
+			"state":"OPEN",
+			"repository":{"nameWithOwner":"acme/rocket"}
+		}`)
+	}
+	nodes.WriteByte(']')
+	return nodes.String()
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

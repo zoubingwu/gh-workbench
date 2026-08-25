@@ -15,7 +15,9 @@ either UI with an in-memory synthetic snapshot.
 1. `gh workbench` resolves the active keyring-backed GitHub CLI account.
 2. An account-wide GraphQL `involves` search discovers open items authored by,
    assigned to, mentioning, or commented on by the viewer; a separate search
-   discovers pull requests already reviewed by the viewer.
+   discovers pull requests already reviewed by the viewer. Each search treats
+   GitHub's most recently updated 1,000 accessible results as its bounded
+   workset.
 3. A review-requested search marks pull requests currently awaiting the viewer.
 4. Results are deduplicated across repositories and reconciled as one account
    resource. A missing item leaves snapshots immediately and remains cached for

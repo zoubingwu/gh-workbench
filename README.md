@@ -7,6 +7,9 @@ awaiting review from the active `gh` account across repositories, stores an
 account-scoped cache in SQLite, and keeps the selected UI current through
 adaptive polling.
 
+GitHub search exposes at most 1,000 matches per query, so Workbench treats the
+most recently updated 1,000 accessible matches as a bounded active workset.
+
 Browser interface:
 
 ![GitHub Workbench browser interface showing synthetic pull requests and issues](docs/github-workbench-demo.jpg)
